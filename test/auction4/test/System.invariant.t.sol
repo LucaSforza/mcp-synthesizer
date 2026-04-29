@@ -16,6 +16,7 @@ contract SystemInvariantTest is Test {
     uint256 public ghost_bidSum;
     address ghost_max_bidder;
     uint256 ghost_nbid;
+    uint256 ghost_id;
 
     address[] public bidders;
     address internal currentBidder;
@@ -44,14 +45,15 @@ contract SystemInvariantTest is Test {
         owner = makeAddr(string(abi.encodePacked("bidder", uint256(11))));
         nft = new ZPunks(owner);
 
-        // Create auction first
-        //IERC721 _collection, uint256 tokenId, address _owner, uint256 _startTime, uint256 _endTime)
-        auction =
-            new Auction(IERC20(address(token)), IERC721(address(nft)), 0, owner, block.timestamp, block.timestamp + 10);
-
         // Mint NFT directly to the auction contract
         vm.startPrank(owner);
-        nft.safeMint(address(auction), "ipfs://test");
+        ghost_id = nft.safeMint(owner);
+        // Create auction first
+        //IERC721 _collection, uint256 tokenId, address _owner, uint256 _startTime, uint256 _endTime)
+        auction = new Auction(
+            IERC20(address(token)), IERC721(address(nft)), ghost_id, owner, block.timestamp, block.timestamp + 10
+        );
+        nft.setApprovalForAll(address(auction), true);
         vm.stopPrank();
     }
 
@@ -84,6 +86,6 @@ contract SystemInvariantTest is Test {
     function invariant_getWinner() public view {
         require(ghost_winner != address(0));
         assertEq(ghost_max_bidder, ghost_winner);
-        assertEq(ghost_winner, nft.ownerOf(ghost_winner));
+        assertEq(ghost_winner, nft.ownerOf(ghost_id));
     }
 }
