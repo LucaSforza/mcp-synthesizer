@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0 or above
 pragma solidity ^0.8.33; // UML
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol"; // UML
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol"; // UML
+
 contract Auction {// UML
     address public owner; // UML
     NFT public auctionedToken; // UML
