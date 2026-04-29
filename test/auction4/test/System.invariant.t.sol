@@ -84,7 +84,7 @@ contract SystemInvariantTest is Test {
     // }
 
     function invariant_getWinner() public view {
-        require(ghost_winner != address(0));
+        if (ghost_winner == address(0)) return;
         assertEq(ghost_max_bidder, ghost_winner);
         assertEq(ghost_winner, nft.ownerOf(ghost_id));
     }

@@ -9,7 +9,9 @@ import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/
 contract ZPunks is ERC721, Ownable {
     uint256 private _nextTokenId;
 
-    constructor(address initialOwner) ERC721("ZPunks", "ZPK") Ownable() {}
+    constructor(address initialOwner) ERC721("ZPunks", "ZPK") Ownable() {
+        _transferOwnership(initialOwner);
+    }
     // function _burn(uint256 a) override {}
 
     function safeMint(address to) public onlyOwner returns (uint256) {
