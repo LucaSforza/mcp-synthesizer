@@ -1,0 +1,27 @@
+{{
+      "id": "qwen3-standard",
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "envKey": "LOCAL_API_KEY",
+      "model": "unsloth/Qwen3-Coder-Next-GGUF:Q3_K_XL"
+    },
+  "modelProviders": [
+    {
+      "id": "my-local-llama",
+      "provider": "openai",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "envKey": "LOCAL_API_KEY"
+    }
+  ],
+  "model": {
+    "name": "unsloth/Qwen3-Coder-Next-GGUF:Q3_K_XL"
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "env": {
+    "LOCAL_API_KEY": "sk-no-key-required"
+  }
+}

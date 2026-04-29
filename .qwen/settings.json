@@ -1,0 +1,59 @@
+{
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "qwen3-standard",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "envKey": "LOCAL_API_KEY",
+        "model": "unsloth/Qwen3-Coder-Next-GGUF:Q3_K_XL"
+      },
+      {
+        "id": "qwen3-apex",
+        "baseUrl": "http://127.0.0.1:8080/v1",
+        "envKey": "LOCAL_API_KEY",
+        "model": "mudler/Qwen3-Coder-Next-APEX-GGUF"
+      }
+    ]
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "$version": 3,
+  "permissions": {
+    "allow": [
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(make *)",
+      "Bash(ctest *)",
+      "Bash(/caveman *)",
+      "Bash(skill: *)",
+      "Bash(skill *)",
+      "Bash(strings *)",
+      "Bash(cmake *)",
+      "Bash(git show *)",
+      "Bash(diff *)",
+      "Bash(cat *)",
+      "Bash(uv *)",
+      "Bash(mkdir *)",
+      "Read(//home/softdream/Programming/probe/my-mcp-server/src/**)",
+      "Bash(cargo build)"
+    ]
+  },
+  "model": {
+    "name": "qwen3-apex"
+  },
+  "mcpServers": {
+    "foundryTools": {
+      "command": "/home/softdream/Programming/probe/my-mcp-server/target/release/my-mcp-server",
+      "args": [
+        "--cwd",
+        "./test/auction4/"
+      ]
+    }
+  },
+  "mcp": {
+    "excluded": []
+  }
+}

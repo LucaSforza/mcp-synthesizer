@@ -1,0 +1,60 @@
+2026-04-17T15:09:11.905Z [INFO] Config initialization started
+2026-04-17T15:09:11.928Z [DEBUG] [BUNDLED_SKILL_LOADER] SkillManager not available, skipping bundled skills
+2026-04-17T15:09:12.021Z [DEBUG] Extension manager initialized
+2026-04-17T15:09:12.021Z [DEBUG] [HOOK_REGISTRY] Hook registry initialized with 0 hook entries
+2026-04-17T15:09:12.046Z [DEBUG] MessageBus initialized with hook subscription
+2026-04-17T15:09:12.047Z [INFO] [SKILL_MANAGER] Starting skill directory watchers...
+2026-04-17T15:09:12.046Z [DEBUG] [TRUSTED_HOOKS] Hook system initialized successfully
+2026-04-17T15:09:12.046Z [DEBUG] Hook system initialized
+2026-04-17T15:09:12.115Z [INFO] [SKILL_MANAGER] Refreshing skills cache...
+2026-04-17T15:09:12.116Z [DEBUG] [SKILL_MANAGER] Skipping project-level skills: project root is home directory
+2026-04-17T15:09:12.116Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/sforza_2050030/.qwen/skills
+2026-04-17T15:09:12.116Z [DEBUG] [SKILL_MANAGER] Loading user level skills from: /home/sforza_2050030/.qwen/skills
+2026-04-17T15:09:12.116Z [DEBUG] [SKILL_MANAGER] Loaded 0 project level skills
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Found 0 entries in /home/sforza_2050030/.qwen/skills
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Loading user level skills from: /home/sforza_2050030/.agents/skills
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/sforza_2050030/.agents/skills
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-04-17T15:09:12.121Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension-level skills from 0 extensions
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Cannot read skills directory /home/sforza_2050030/.agents/skills: ENOENT: no such file or directory, scandir '/home/sforza_2050030/.agents/skills'
+2026-04-17T15:09:12.121Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension level skills
+2026-04-17T15:09:12.121Z [DEBUG] [SKILL_MANAGER] Loading bundled skills from: /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-17T15:09:12.120Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-04-17T15:09:12.121Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-17T15:09:12.121Z [DEBUG] [SKILL_MANAGER] Found 3 entries in /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-17T15:09:12.332Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: loop (bundled) from /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled/loop/SKILL.md
+2026-04-17T15:09:12.334Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: qc-helper (bundled) from /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled/qc-helper/SKILL.md
+2026-04-17T15:09:12.336Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: review (bundled) from /home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/bundled/review/SKILL.md
+2026-04-17T15:09:12.336Z [INFO] [SKILL_MANAGER] Skills cache refreshed: 3 total skills loaded
+2026-04-17T15:09:12.336Z [DEBUG] [SKILL_MANAGER] Loaded 3 bundled level skills
+2026-04-17T15:09:12.338Z [DEBUG] Skill manager initialized
+2026-04-17T15:09:12.338Z [INFO] [SKILL_MANAGER] Skill directory watchers started
+2026-04-17T15:09:12.339Z [DEBUG] Permission manager initialized
+2026-04-17T15:09:12.339Z [DEBUG] [MEMORY_DISCOVERY] Loading server hierarchical memory for CWD: /home/sforza_2050030 (importFormat: tree)
+2026-04-17T15:09:12.336Z [DEBUG] [SKILL_MANAGER] Loaded 3 bundled skills
+2026-04-17T15:09:12.342Z [DEBUG] [MEMORY_DISCOVERY] Final ordered QWEN.md,AGENTS.md paths to read: ["/home/sforza_2050030/.qwen/output-language.md"]
+2026-04-17T15:09:12.374Z [DEBUG] [MEMORY_DISCOVERY] Successfully read and processed imports: /home/sforza_2050030/.qwen/output-language.md (Length: 812)
+2026-04-17T15:09:12.374Z [DEBUG] Hierarchical memory loaded
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Using cached skills
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Processing 0 project level skills
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Processing 0 user level skills
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Processing 0 extension level skills
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Listing skills
+2026-04-17T15:09:12.377Z [INFO] [SKILL_MANAGER] Listed 3 unique skills
+2026-04-17T15:09:12.376Z [DEBUG] [SKILL_MANAGER] Processing 3 bundled level skills
+2026-04-17T15:09:12.379Z [DEBUG] ToolRegistry created: ["agent","skill","list_directory","read_file","grep_search","glob","edit","write_file","run_shell_command","save_memory","todo_write","ask_user_question","exit_plan_mode","web_fetch"] (14 tools)
+2026-04-17T15:09:12.379Z [INFO] Tool registry initialized with 14 tools
+2026-04-17T15:09:12.406Z [INFO] Gemini client initialized
+2026-04-17T15:09:12.409Z [INFO] Config initialization completed
+2026-04-17T15:09:12.415Z [DEBUG] [APP_CONTAINER] SessionStart event completed successfully
+2026-04-17T15:09:12.435Z [DEBUG] [SKILL_MANAGER] Using cached skills
+2026-04-17T15:09:12.435Z [DEBUG] [SKILL_MANAGER] Processing 3 bundled level skills
+2026-04-17T15:09:12.435Z [DEBUG] [SKILL_MANAGER] Listing skills at level: bundled
+2026-04-17T15:09:12.437Z [DEBUG] [BUNDLED_SKILL_LOADER] Loaded 2 bundled skill(s) as slash commands
+2026-04-17T15:09:12.435Z [INFO] [SKILL_MANAGER] Listed 3 unique skills
+2026-04-17T15:09:12.437Z [DEBUG] [BUNDLED_SKILL_LOADER] Hiding skill "loop" because cron is not enabled
+2026-04-17T15:09:12.934Z [DEBUG] [IDE] Failed to read IDE connection directory: Error: ENOENT: no such file or directory, scandir '/home/sforza_2050030/.qwen/ide'
+    at async Object.readdir (node:internal/fs/promises:956:18)
+    at async _IdeClient.getAllConnectionConfigs (file:///home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/cli.js:212514:24)
+    at async _IdeClient.getConnectionConfigFromFile (file:///home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/cli.js:212486:25)
+    at async file:///home/sforza_2050030/.nvm/versions/node/v24.15.0/lib/node_modules/@qwen-code/qwen-code/cli.js:212144:39
