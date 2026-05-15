@@ -64,17 +64,58 @@ cargo run -- \
 | `--invariants` | `-i` | Number of Halmos invariants to verify | `0` |
 | `--db-path` | `-d` | SQLite database location | `$HOME/Documents/solidity-synthesis.db` |
 
-### Connecting from Claude Code
+### Claude Code
 
+Add project-level (recommended):
 ```bash
 claude mcp add --transport stdio --scope project solidity-synthesis \
-  "cargo run --manifest-path /path/to/my-mcp-server/Cargo.toml -- \
+  "cargo run --manifest-path ./Cargo.toml -- \
     --cwd . --project my-project --invariants 5"
 ```
 
-### Connecting from Claude Desktop / Claude.ai
+Add user-global (all projects):
+```bash
+claude mcp add --transport stdio --scope user solidity-synthesis \
+  "cargo run --manifest-path /abs/path/to/my-mcp-server/Cargo.toml -- \
+    --cwd /abs/path/to/foundry/project \
+    --project my-project \
+    --invariants 5"
+```
 
-Add a custom connector with the stdio transport pointing to the compiled binary.
+Remove:
+```bash
+claude mcp remove solidity-synthesis
+```
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "solidity-synthesis": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path", "/path/to/my-mcp-server/Cargo.toml",
+        "--",
+        "--cwd", "/path/to/foundry/project",
+        "--project", "my-project",
+        "--invariants", "5"
+      ]
+    }
+  }
+}
+```
+
+After editing, restart Claude Desktop.
 
 ## Tools
 
