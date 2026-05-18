@@ -18,7 +18,7 @@ pub struct SynthesisPipeline {
     pub cwd: String,
     pub db: Database,
     pub project_id: i64,
-    pub _project_name: String,  // unused but kept for context in reports
+    pub _project_name: String, // unused but kept for context in reports
     pub project_number_invariants: i32,
     pub test_run_id: i64,
     pub iteration: i32,
@@ -82,9 +82,7 @@ impl SynthesisPipeline {
         let start = Instant::now();
         match Self::run_command("forge", &["build", "-vvv"], &self.cwd) {
             Ok((output, true)) => {
-                self.db
-                    .increment_compilation_passed(self.test_run_id)
-                    .ok();
+                self.db.increment_compilation_passed(self.test_run_id).ok();
                 VerificationReport {
                     stage: "build".into(),
                     passed: true,
@@ -237,10 +235,7 @@ impl SynthesisPipeline {
                     VerificationReport {
                         stage: "halmos".into(),
                         passed: false,
-                        output: format!(
-                            "Halmos counterexample found.\n{}",
-                            output
-                        ),
+                        output: format!("Halmos counterexample found.\n{}", output),
                         metrics,
                         gas_of_implementation: gas,
                     }
@@ -263,8 +258,7 @@ impl SynthesisPipeline {
                         passed: true,
                         output: format!(
                             "Halmos: partial proof (accepted under partial model checking). Unproved invariants: {}\n{}",
-                            not_proved,
-                            output
+                            not_proved, output
                         ),
                         metrics,
                         gas_of_implementation: gas,
@@ -302,10 +296,7 @@ impl SynthesisPipeline {
                 .find_map(|w| {
                     let w = w.trim();
                     if w.ends_with("gas") {
-                        w.trim_end_matches("gas")
-                            .trim()
-                            .parse::<i64>()
-                            .ok()
+                        w.trim_end_matches("gas").trim().parse::<i64>().ok()
                     } else {
                         None
                     }
