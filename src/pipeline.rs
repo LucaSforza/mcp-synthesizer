@@ -187,7 +187,7 @@ impl SynthesisPipeline {
 
     fn stage_halmos(&mut self) -> VerificationReport {
         let start = Instant::now();
-        match Self::run_command("halmos", &["--verify"], &self.cwd) {
+        match Self::run_command("halmos", &["--solver-threads", "$(nproc)"], &self.cwd) {
             Ok((output, true)) => {
                 // All proven
                 let gas = self.extract_gas(&output);
