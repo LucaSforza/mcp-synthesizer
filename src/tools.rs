@@ -25,6 +25,7 @@ impl SynthesisTools {
         number_invariants: i32,
         project_id: i64,
     ) -> Self {
+        eprintln!("[DEBUG] tools::new cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}", cwd, db_path, project_name, number_invariants, project_id);
         Self {
             cwd,
             db_path,
@@ -44,19 +45,25 @@ impl SynthesisTools {
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     fn forge_install(&self) -> Result<String, String> {
+        eprintln!("[DEBUG] tools::forge_install cwd=\"{}\"", self.cwd);
         let output = Command::new("forge")
             .current_dir(&self.cwd)
             .arg("install")
             .output()
-            .map_err(|e| format!("Failed to execute forge install: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[DEBUG] tools::forge_install::err io_error=\"{}\"", e);
+                format!("Failed to execute forge install: {}", e)
+            })?;
 
         let combined =
             String::from_utf8_lossy(&output.stdout).to_string()
                 + &String::from_utf8_lossy(&output.stderr).to_string();
 
         if output.status.success() {
+            eprintln!("[DEBUG] tools::forge_install::ok status=success output_len={}", combined.len());
             Ok(combined)
         } else {
+            eprintln!("[DEBUG] tools::forge_install::err status=failed output_len={}", combined.len());
             Err(format!("forge install failed.\n{}", combined))
         }
     }
@@ -66,11 +73,15 @@ impl SynthesisTools {
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
     )]
     fn forge_build(&self) -> Result<String, String> {
+        eprintln!("[DEBUG] tools::forge_build cwd=\"{}\"", self.cwd);
         let output = Command::new("forge")
             .current_dir(&self.cwd)
             .args(["build", "-vvv"])
             .output()
-            .map_err(|e| format!("Failed to execute forge build: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[DEBUG] tools::forge_build::err io_error=\"{}\"", e);
+                format!("Failed to execute forge build: {}", e)
+            })?;
 
         let combined =
             String::from_utf8_lossy(&output.stdout).to_string()
@@ -78,9 +89,11 @@ impl SynthesisTools {
 
         if output.status.success() {
             self.db.lock().ok().and_then(|db| db.increment_compilation_passed(self.project_id).ok());
+            eprintln!("[DEBUG] tools::forge_build::ok status=success output_len={}", combined.len());
             Ok(format!("Build passed.\n{}", combined))
         } else {
             self.db.lock().ok().and_then(|db| db.increment_compilation_not_passed(self.project_id).ok());
+            eprintln!("[DEBUG] tools::forge_build::err status=failed output_len={}", combined.len());
             Err(format!("Build failed.\n{}", combined))
         }
     }
@@ -90,19 +103,25 @@ impl SynthesisTools {
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true)
     )]
     fn forge_test(&self) -> Result<String, String> {
+        eprintln!("[DEBUG] tools::forge_test cwd=\"{}\"", self.cwd);
         let output = Command::new("forge")
             .current_dir(&self.cwd)
             .args(["test", "-vvv"])
             .output()
-            .map_err(|e| format!("Failed to execute forge test: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[DEBUG] tools::forge_test::err io_error=\"{}\"", e);
+                format!("Failed to execute forge test: {}", e)
+            })?;
 
         let combined =
             String::from_utf8_lossy(&output.stdout).to_string()
                 + &String::from_utf8_lossy(&output.stderr).to_string();
 
         if output.status.success() {
+            eprintln!("[DEBUG] tools::forge_test::ok status=success output_len={}", combined.len());
             Ok(format!("Tests passed.\n{}", combined))
         } else {
+            eprintln!("[DEBUG] tools::forge_test::err status=failed output_len={}", combined.len());
             Err(format!("Tests failed.\n{}", combined))
         }
     }
@@ -112,12 +131,14 @@ impl SynthesisTools {
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
     )]
     fn run_synthesis(&self) -> Result<String, String> {
+        eprintln!("[DEBUG] tools::run_synthesis cwd=\"{}\" project=\"{}\" invariants={}", self.cwd, self.project_name, self.number_invariants);
         let mut pipe_lock = self
             .pipeline
             .lock()
             .map_err(|e| format!("Internal lock error: {}", e))?;
 
         if pipe_lock.is_none() {
+            eprintln!("[DEBUG] tools::run_synthesis::lazy_init creating pipeline");
             *pipe_lock = Some(SynthesisPipeline::new(
                 self.cwd.clone(),
                 Database::new(&self.db_path)
@@ -129,7 +150,9 @@ impl SynthesisTools {
         }
 
         let pipeline = pipe_lock.as_mut().unwrap();
+        eprintln!("[DEBUG] tools::run_synthesis::before_run iteration={}", pipeline.iteration);
         let report = pipeline.run();
+        eprintln!("[DEBUG] tools::run_synthesis::report iteration={} stage={} passed={} has_metrics={}", pipeline.iteration, report.stage, report.passed, report.metrics.is_some());
 
         let mut result = format!(
             "=== Synthesis Pipeline Report ===\n\
@@ -167,8 +190,10 @@ impl SynthesisTools {
         }
 
         if report.passed {
+            eprintln!("[DEBUG] tools::run_synthesis::ok iteration={} stage={}", pipeline.iteration, report.stage);
             Ok(result)
         } else {
+            eprintln!("[DEBUG] tools::run_synthesis::err iteration={} stage={}", pipeline.iteration, report.stage);
             Err(result)
         }
     }

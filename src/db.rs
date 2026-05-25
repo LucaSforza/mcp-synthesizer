@@ -46,13 +46,16 @@ pub struct Metrics {
 
 impl Database {
     pub fn new(path: &str) -> SqlResult<Self> {
+        eprintln!("[DEBUG] db::new path=\"{}\"", path);
         let conn = Connection::open(path)?;
         let db = Self { conn };
         db.run_migrations()?;
+        eprintln!("[DEBUG] db::new::ok path=\"{}\"", path);
         Ok(db)
     }
 
     fn run_migrations(&self) -> SqlResult<()> {
+        eprintln!("[DEBUG] db::run_migrations");
         self.conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS project (
@@ -82,11 +85,12 @@ impl Database {
             );
             ",
         )?;
+        eprintln!("[DEBUG] db::run_migrations::ok tables=[project,test_run,synthesis_trial]");
         Ok(())
     }
 
     pub fn get_or_create_project(&self, name: &str, number_invariants: i32) -> SqlResult<Project> {
-        // Try to find existing project
+        eprintln!("[DEBUG] db::get_or_create_project name=\"{}\" number_invariants={}", name, number_invariants);
         let existing = self.conn.query_row(
             "SELECT id, name, number_invariants FROM project WHERE name = ?1",
             params![name],
@@ -100,29 +104,38 @@ impl Database {
         );
 
         match existing {
-            Ok(project) => Ok(project),
+            Ok(project) => {
+                eprintln!("[DEBUG] db::get_or_create_project::found id={}", project.id);
+                Ok(project)
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 self.conn.execute(
                     "INSERT INTO project (name, number_invariants) VALUES (?1, ?2)",
                     params![name, number_invariants],
                 )?;
                 let id = self.conn.last_insert_rowid();
+                eprintln!("[DEBUG] db::get_or_create_project::created id={}", id);
                 Ok(Project {
                     id,
                     name: name.to_string(),
                     number_invariants,
                 })
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                eprintln!("[DEBUG] db::get_or_create_project::err error=\"{}\"", e);
+                Err(e)
+            }
         }
     }
 
     pub fn create_test_run(&self, project_id: i64) -> SqlResult<TestRun> {
+        eprintln!("[DEBUG] db::create_test_run project_id={}", project_id);
         self.conn.execute(
             "INSERT INTO test_run (project_id) VALUES (?1)",
             params![project_id],
         )?;
         let id = self.conn.last_insert_rowid();
+        eprintln!("[DEBUG] db::create_test_run::ok id={}", id);
         Ok(TestRun {
             id,
             project_id,
@@ -144,6 +157,9 @@ impl Database {
         failure_detail: Option<&str>,
         project_number_invariants: i32,
     ) -> SqlResult<SynthesisTrial> {
+        eprintln!("[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={}",
+            test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, project_number_invariants);
+
         // Check succeeded constraint: only the last trial can be succeeded
         if result_type.starts_with("succeeded") {
             let has_later_trial: bool = self.conn.query_row(
@@ -151,6 +167,7 @@ impl Database {
                 params![test_run_id, iteration],
                 |row| row.get(0),
             )?;
+            eprintln!("[DEBUG] db::record_trial::check_succeeded has_later_trial={}", has_later_trial);
             if !has_later_trial {
                 // Check that prior trials are all failed
                 let _prior_non_failed: i32 = self.conn.query_row(
@@ -178,6 +195,7 @@ impl Database {
             params![test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail],
         )?;
         let id = self.conn.last_insert_rowid();
+        eprintln!("[DEBUG] db::record_trial::ok trial_id={} sql=\"INSERT INTO synthesis_trial (...)\"", id);
         Ok(SynthesisTrial {
             id,
             test_run_id,
@@ -190,6 +208,7 @@ impl Database {
     }
 
     pub fn increment_compilation_passed(&self, test_run_id: i64) -> SqlResult<()> {
+        eprintln!("[DEBUG] db::increment_compilation_passed test_run_id={}", test_run_id);
         self.conn.execute(
             "UPDATE test_run SET compilation_passed = compilation_passed + 1 WHERE id = ?1",
             params![test_run_id],
@@ -198,6 +217,7 @@ impl Database {
     }
 
     pub fn increment_compilation_not_passed(&self, test_run_id: i64) -> SqlResult<()> {
+        eprintln!("[DEBUG] db::increment_compilation_not_passed test_run_id={}", test_run_id);
         self.conn.execute(
             "UPDATE test_run SET compilation_not_passed = compilation_not_passed + 1 WHERE id = ?1",
             params![test_run_id],
@@ -206,7 +226,8 @@ impl Database {
     }
 
     pub fn get_project(&self, project_id: i64) -> SqlResult<Project> {
-        self.conn.query_row(
+        eprintln!("[DEBUG] db::get_project project_id={}", project_id);
+        let result = self.conn.query_row(
             "SELECT id, name, number_invariants FROM project WHERE id = ?1",
             params![project_id],
             |row| {
@@ -216,10 +237,16 @@ impl Database {
                     number_invariants: row.get(2)?,
                 })
             },
-        )
+        );
+        match &result {
+            Ok(p) => eprintln!("[DEBUG] db::get_project::ok id={} name=\"{}\" invariants={}", p.id, p.name, p.number_invariants),
+            Err(e) => eprintln!("[DEBUG] db::get_project::err error=\"{}\"", e),
+        }
+        result
     }
 
     pub fn get_metrics(&self, project_id: i64) -> SqlResult<Metrics> {
+        eprintln!("[DEBUG] db::get_metrics project_id={}", project_id);
         let _project = self.get_project(project_id)?;
 
         // Aggregate gas metrics across all trials for this project's test runs
@@ -280,7 +307,7 @@ impl Database {
             |row| row.get(0),
         )?;
 
-        Ok(Metrics {
+        let metrics = Metrics {
             avg_gas: gas_stats.0,
             peak_gas: gas_stats.1,
             compilation_passed: comp_stats.0,
@@ -289,7 +316,13 @@ impl Database {
             proven_invariants: proven,
             unproven_invariants: unproven,
             succeeded_iterations: succeeded_iters,
-        })
+        };
+        eprintln!(
+            "[DEBUG] db::get_metrics::ok project_id={} avg_gas={:?} peak_gas={:?} comp_passed={} comp_not_passed={} total_trials={} proven={} unproven={} succeeded_at_iter={}",
+            project_id, metrics.avg_gas, metrics.peak_gas, metrics.compilation_passed, metrics.compilation_not_passed,
+            metrics.total_trials, metrics.proven_invariants, metrics.unproven_invariants, metrics.succeeded_iterations
+        );
+        Ok(metrics)
     }
 }
 
