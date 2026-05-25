@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::process::Command;
 use std::time::Instant;
+
+use serde::Deserialize;
 
 use crate::db::{Database, Metrics};
 
@@ -232,9 +235,9 @@ impl SynthesisPipeline {
         );
         let start = Instant::now();
         let cwd = self.cwd.clone();
-        match self.run_command("forge", &["test", "-vvv"], &cwd) {
+        match self.run_command("forge", &["test", "--json"], &cwd) {
             Ok((output, true)) => {
-                self.forge_gas = SynthesisPipeline::extract_forge_gas(&output);
+                self.forge_gas = extract_forge_gas_json(&output);
                 eprintln!(
                     "[DEBUG] pipeline::stage_test::ok passed=true duration={:?} forge_gas={:?}",
                     start.elapsed(),
@@ -436,62 +439,6 @@ impl SynthesisPipeline {
         }
     }
 
-    /// Extract total gas from forge test output.
-    /// Parses `gas: NUMBER` and `μ: NUMBER` (mean gas for fuzz tests), sums all values.
-    fn extract_forge_gas(output: &str) -> Option<i64> {
-        eprintln!(
-            "[DEBUG] pipeline::extract_forge_gas output_len={}",
-            output.len()
-        );
-        let mut total: i64 = 0;
-        for line in output.lines() {
-            let lc = line.to_lowercase();
-            // gas: NUMBER e.g. "(gas: 28827)"
-            if let Some(pos) = lc.find("gas:") {
-                let after = &lc[pos + 4..];
-                let num_str: String = after
-                    .chars()
-                    .skip_while(|c| !c.is_numeric())
-                    .take_while(|c| c.is_numeric())
-                    .collect();
-                if let Ok(n) = num_str.parse::<i64>() {
-                    eprintln!(
-                        "[DEBUG] pipeline::extract_forge_gas::found gas:{} total_before={}",
-                        n, total
-                    );
-                    total += n;
-                    continue;
-                }
-            }
-            // μ: NUMBER e.g. "(μ: 26767, ...)" — mean gas for fuzz tests
-            if let Some(pos) = lc.find("μ:") {
-                let after = &lc[pos + "μ:".len()..];
-                let num_str: String = after
-                    .chars()
-                    .skip_while(|c| !c.is_numeric())
-                    .take_while(|c| c.is_numeric())
-                    .collect();
-                if let Ok(n) = num_str.parse::<i64>() {
-                    eprintln!(
-                        "[DEBUG] pipeline::extract_forge_gas::found μ:{} total_before={}",
-                        n, total
-                    );
-                    total += n;
-                }
-            }
-        }
-        if total > 0 {
-            eprintln!(
-                "[DEBUG] pipeline::extract_forge_gas::result total={}",
-                total
-            );
-            Some(total)
-        } else {
-            eprintln!("[DEBUG] pipeline::extract_forge_gas::result None");
-            None
-        }
-    }
-
     /// Extract number of unproved invariants from halmos output
     fn extract_not_proved(&self, output: &str) -> i32 {
         eprintln!(
@@ -519,6 +466,83 @@ impl SynthesisPipeline {
             self.project_number_invariants
         );
         self.project_number_invariants
+    }
+}
+
+#[derive(Deserialize)]
+struct ForgeTestResult {
+    status: String,
+    kind: ForgeTestKind,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ForgeTestKind {
+    Unit {
+        #[serde(rename = "Unit")]
+        unit: UnitKind,
+    },
+    Fuzz {
+        #[serde(rename = "Fuzz")]
+        fuzz: FuzzKind,
+    },
+}
+
+#[derive(Deserialize)]
+struct UnitKind {
+    gas: i64,
+}
+
+#[derive(Deserialize)]
+struct FuzzKind {
+    #[serde(rename = "mean_gas")]
+    mean_gas: i64,
+}
+
+/// Extract total gas from forge test JSON output.
+/// Parses `forge test --json` output: Unit tests → `kind.Unit.gas`, fuzz tests → `kind.Fuzz.mean_gas`.
+fn extract_forge_gas_json(output: &str) -> Option<i64> {
+    #[derive(Deserialize)]
+    struct ForgeSuite {
+        #[serde(rename = "test_results")]
+        test_results: HashMap<String, ForgeTestResult>,
+    }
+
+    eprintln!(
+        "[DEBUG] pipeline::extract_forge_gas_json output_len={}",
+        output.len()
+    );
+    let suites: HashMap<String, ForgeSuite> = serde_json::from_str(output).ok()?;
+    let mut total: i64 = 0;
+    for suite in suites.values() {
+        for result in suite.test_results.values() {
+            match &result.kind {
+                ForgeTestKind::Unit { unit } => {
+                    eprintln!(
+                        "[DEBUG] pipeline::extract_forge_gas_json::unit gas={} total_before={}",
+                        unit.gas, total
+                    );
+                    total += unit.gas;
+                }
+                ForgeTestKind::Fuzz { fuzz } => {
+                    eprintln!(
+                        "[DEBUG] pipeline::extract_forge_gas_json::fuzz mean_gas={} total_before={}",
+                        fuzz.mean_gas, total
+                    );
+                    total += fuzz.mean_gas;
+                }
+            }
+        }
+    }
+    if total > 0 {
+        eprintln!(
+            "[DEBUG] pipeline::extract_forge_gas_json::result total={}",
+            total
+        );
+        Some(total)
+    } else {
+        eprintln!("[DEBUG] pipeline::extract_forge_gas_json::result None");
+        None
     }
 }
 
@@ -630,8 +654,11 @@ mod tests {
     fn test_halmos_succeeded_full() {
         let mut ctx = setup(3);
         push_ok(&mut ctx.pipeline, "build ok");
-        // Forge test mock must include gas: format (new source of gas data)
-        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 50000)");
+        // Forge test mock as forge test --json output
+        push_ok(
+            &mut ctx.pipeline,
+            r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":50000}}}}}}"#,
+        );
         push_ok(&mut ctx.pipeline, "halmos: all proved");
         let report = ctx.pipeline.run();
         assert!(report.passed);
@@ -692,7 +719,10 @@ mod tests {
 
         // Iteration 3: build passes, test passes, halmos proves all
         push_ok(&mut ctx.pipeline, "build ok");
-        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 30000)");
+        push_ok(
+            &mut ctx.pipeline,
+            r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":30000}}}}}}"#,
+        );
         push_ok(&mut ctx.pipeline, "all good");
         let r3 = ctx.pipeline.run();
         assert!(r3.passed);
@@ -706,26 +736,22 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_forge_gas() {
-        // Sum of individual test gas
-        let out = "[PASS] test_A() (gas: 1000)\n[PASS] test_B() (gas: 2000)";
-        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(3000));
+    fn test_extract_forge_gas_json() {
+        // Unit test
+        let json = r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":28827}}}}}}"#;
+        assert_eq!(extract_forge_gas_json(json), Some(28827));
 
-        // Fuzz test with mean gas (μ)
-        let out = "[PASS] testFuzz(uint256) (runs: 256, μ: 50000, ~: 52579)";
-        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(50000));
+        // Fuzz test
+        let json = r#"{"A.t.sol:A":{"test_results":{"a(uint256)":{"status":"Success","kind":{"Fuzz":{"mean_gas":27545,"runs":256}}}}}}"#;
+        assert_eq!(extract_forge_gas_json(json), Some(27545));
 
-        // Mixed: individual gas + fuzz mean
-        let out = "[PASS] test_A() (gas: 1000)\n[PASS] testFuzz(uint256) (μ: 50000)";
-        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(51000));
+        // Mixed: unit + fuzz
+        let json = r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":1000}}},"b(uint256)":{"status":"Success","kind":{"Fuzz":{"mean_gas":50000,"runs":256}}}}}}"#;
+        assert_eq!(extract_forge_gas_json(json), Some(51000));
 
-        // Real-world fuzz test with runs, μ, ~
-        let out = "[PASS] test_SystemInvariants((uint8,uint256,uint256)[4]) (runs: 100000, μ: 1154349, ~: 1221586)";
-        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(1154349));
-
-        // No gas
-        assert_eq!(SynthesisPipeline::extract_forge_gas("no gas here"), None);
-        assert_eq!(SynthesisPipeline::extract_forge_gas(""), None);
+        // Empty / invalid
+        assert_eq!(extract_forge_gas_json("{}"), None);
+        assert_eq!(extract_forge_gas_json("invalid"), None);
     }
 
     #[test]
@@ -747,7 +773,10 @@ mod tests {
             ctx.pipeline.run();
         }
         push_ok(&mut ctx.pipeline, "build ok");
-        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 75000)");
+        push_ok(
+            &mut ctx.pipeline,
+            r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":75000}}}}}}"#,
+        );
         push_ok(&mut ctx.pipeline, "all proven");
         ctx.pipeline.run();
 
