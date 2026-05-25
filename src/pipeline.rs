@@ -507,7 +507,7 @@ struct FuzzKind {
 
 /// Extract total gas from forge test JSON output.
 /// Parses `forge test --json` output: Unit tests → `kind.Unit.gas`, fuzz tests → `kind.Fuzz.mean_gas`.
-fn extract_forge_gas_json(output: &str) -> Option<i64> {
+pub fn extract_forge_gas_json(output: &str) -> Option<i64> {
     #[derive(Deserialize)]
     struct ForgeSuite {
         #[serde(rename = "test_results")]

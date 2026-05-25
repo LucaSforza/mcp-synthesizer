@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use rmcp::{tool, tool_router};
 
 use crate::db::Database;
-use crate::pipeline::SynthesisPipeline;
+use crate::pipeline::{SynthesisPipeline, extract_forge_gas_json};
 
 pub struct SynthesisTools {
     pub cwd: String,
@@ -121,7 +121,7 @@ impl SynthesisTools {
         eprintln!("[DEBUG] tools::forge_test cwd=\"{}\"", self.cwd);
         let output = Command::new("forge")
             .current_dir(&self.cwd)
-            .args(["test", "-vvv"])
+            .args(["test", "--json"])
             .output()
             .map_err(|e| {
                 eprintln!("[DEBUG] tools::forge_test::err io_error=\"{}\"", e);
@@ -133,13 +133,14 @@ impl SynthesisTools {
                 + &String::from_utf8_lossy(&output.stderr).to_string();
 
         let iteration = self.next_iteration();
+        let gas = extract_forge_gas_json(&combined);
 
         if output.status.success() {
             self.db.lock().ok().and_then(|db| {
                 db.record_trial(
                     self.test_run_id,
                     iteration,
-                    None,
+                    gas,
                     "succeeded_fuzzing",
                     0,
                     None,
@@ -147,14 +148,14 @@ impl SynthesisTools {
                     false,
                 ).ok()
             });
-            eprintln!("[DEBUG] tools::forge_test::ok status=success output_len={}", combined.len());
+            eprintln!("[DEBUG] tools::forge_test::ok status=success output_len={} gas={:?}", combined.len(), gas);
             Ok(format!("Tests passed.\n{}", combined))
         } else {
             self.db.lock().ok().and_then(|db| {
                 db.record_trial(
                     self.test_run_id,
                     iteration,
-                    None,
+                    gas,
                     "failed_fuzzing",
                     0,
                     Some(&combined),
@@ -162,7 +163,7 @@ impl SynthesisTools {
                     false,
                 ).ok()
             });
-            eprintln!("[DEBUG] tools::forge_test::err status=failed output_len={}", combined.len());
+            eprintln!("[DEBUG] tools::forge_test::err status=failed output_len={} gas={:?}", combined.len(), gas);
             Err(format!("Tests failed.\n{}", combined))
         }
     }
