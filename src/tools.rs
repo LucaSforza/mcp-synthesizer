@@ -170,7 +170,7 @@ impl SynthesisTools {
         if let Some(metrics) = &report.metrics {
             result.push_str(&format!(
                 "\n--- Metrics ---\n\
-                 Avg gas: {:?}\n\
+                 Median gas: {:?}\n\
                  Peak gas: {:?}\n\
                  Compilation passed: {}\n\
                  Compilation not passed: {}\n\
@@ -178,7 +178,7 @@ impl SynthesisTools {
                  Proven invariants: {}\n\
                  Unproven invariants: {}\n\
                  Succeeded at iteration: {}\n",
-                metrics.avg_gas,
+                metrics.median_gas,
                 metrics.peak_gas,
                 metrics.compilation_passed,
                 metrics.compilation_not_passed,

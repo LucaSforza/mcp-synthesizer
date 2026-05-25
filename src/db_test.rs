@@ -150,7 +150,7 @@ fn test_get_metrics_empty() {
     assert_eq!(metrics.compilation_passed, 0);
     assert_eq!(metrics.compilation_not_passed, 0);
     assert_eq!(metrics.succeeded_iterations, 0);
-    assert!(metrics.avg_gas.is_none());
+    assert!(metrics.median_gas.is_none());
     assert!(metrics.peak_gas.is_none());
 }
 
@@ -180,7 +180,7 @@ fn test_get_metrics_aggregation() {
     assert_eq!(metrics.compilation_passed, 2);
     assert_eq!(metrics.compilation_not_passed, 1);
     assert_eq!(metrics.total_trials, 3);
-    assert_eq!(metrics.avg_gas.unwrap() as i64, 95000); // (100000 + 90000) / 2
+    assert_eq!(metrics.median_gas.unwrap() as i64, 95000); // (100000 + 90000) / 2
     assert_eq!(metrics.peak_gas.unwrap(), 100000);
     assert_eq!(metrics.proven_invariants, 5); // 5 - 0 for succeeded_full
     assert_eq!(metrics.unproven_invariants, 2); // from succeeded_partial

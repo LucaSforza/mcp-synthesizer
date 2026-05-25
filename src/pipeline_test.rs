@@ -118,7 +118,7 @@ fn test_halmos_succeeded_full() {
     let metrics = ctx.db.get_metrics(ctx.pipeline.project_id).unwrap();
     assert_eq!(metrics.total_trials, 1);
     assert_eq!(metrics.proven_invariants, 3);
-    assert_eq!(metrics.avg_gas.unwrap() as i64, 50000);
+    assert_eq!(metrics.median_gas.unwrap() as i64, 50000);
     assert_eq!(metrics.peak_gas.unwrap(), 50000);
 }
 
@@ -273,7 +273,7 @@ fn test_metrics_after_full_loop() {
     assert_eq!(metrics.total_trials, 3);
     assert_eq!(metrics.compilation_passed, 1);
     assert_eq!(metrics.compilation_not_passed, 2);
-    assert_eq!(metrics.avg_gas.unwrap() as i64, 75000);
+    assert_eq!(metrics.median_gas.unwrap() as i64, 75000);
     assert_eq!(metrics.peak_gas.unwrap(), 75000);
     assert_eq!(metrics.proven_invariants, 3);
     assert_eq!(metrics.unproven_invariants, 0);

@@ -34,7 +34,7 @@ pub struct SynthesisTrial {
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
-    pub avg_gas: Option<f64>,
+    pub median_gas: Option<f64>,
     pub peak_gas: Option<i64>,
     pub compilation_passed: i32,
     pub compilation_not_passed: i32,
@@ -263,19 +263,37 @@ impl Database {
         let _project = self.get_project(project_id)?;
 
         // Aggregate gas metrics across all trials for this project's test runs
-        let gas_stats = self.conn.query_row(
-            "SELECT AVG(gas_of_implementation), MAX(gas_of_implementation)
+        let peak_gas: Option<i64> = self.conn.query_row(
+            "SELECT MAX(gas_of_implementation)
              FROM synthesis_trial st
              JOIN test_run tr ON st.test_run_id = tr.id
              WHERE tr.project_id = ?1 AND gas_of_implementation IS NOT NULL",
             params![project_id],
-            |row| {
-                Ok((
-                    row.get::<_, Option<f64>>(0)?,
-                    row.get::<_, Option<i64>>(1)?,
-                ))
-            },
+            |row| row.get(0),
         )?;
+
+        // Median gas: fetch all non-null values, compute in Rust
+        let median_gas = {
+            let mut stmt = self.conn.prepare(
+                "SELECT gas_of_implementation
+                 FROM synthesis_trial st
+                 JOIN test_run tr ON st.test_run_id = tr.id
+                 WHERE tr.project_id = ?1 AND gas_of_implementation IS NOT NULL
+                 ORDER BY gas_of_implementation",
+            )?;
+            let rows = stmt.query_map(params![project_id], |row| row.get::<_, i64>(0))?;
+            let vals: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
+            if vals.is_empty() {
+                None
+            } else {
+                let mid = vals.len() / 2;
+                if vals.len() % 2 == 1 {
+                    Some(vals[mid] as f64)
+                } else {
+                    Some((vals[mid - 1] + vals[mid]) as f64 / 2.0)
+                }
+            }
+        };
 
         // Compilation stats
         let comp_stats = self.conn.query_row(
@@ -321,8 +339,8 @@ impl Database {
         )?;
 
         let metrics = Metrics {
-            avg_gas: gas_stats.0,
-            peak_gas: gas_stats.1,
+            median_gas,
+            peak_gas,
             compilation_passed: comp_stats.0,
             compilation_not_passed: comp_stats.1,
             total_trials,
@@ -331,8 +349,8 @@ impl Database {
             succeeded_iterations: succeeded_iters,
         };
         eprintln!(
-            "[DEBUG] db::get_metrics::ok project_id={} avg_gas={:?} peak_gas={:?} comp_passed={} comp_not_passed={} total_trials={} proven={} unproven={} succeeded_at_iter={}",
-            project_id, metrics.avg_gas, metrics.peak_gas, metrics.compilation_passed, metrics.compilation_not_passed,
+            "[DEBUG] db::get_metrics::ok project_id={} median_gas={:?} peak_gas={:?} comp_passed={} comp_not_passed={} total_trials={} proven={} unproven={} succeeded_at_iter={}",
+            project_id, metrics.median_gas, metrics.peak_gas, metrics.compilation_passed, metrics.compilation_not_passed,
             metrics.total_trials, metrics.proven_invariants, metrics.unproven_invariants, metrics.succeeded_iterations
         );
         Ok(metrics)
