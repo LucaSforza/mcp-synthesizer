@@ -37,13 +37,19 @@ async fn main() -> anyhow::Result<()> {
         format!("{}/Documents/solidity-synthesis.db", home)
     });
 
-    eprintln!("[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} db_path=\"{}\"", args.cwd, args.project, args.invariants, db_path);
+    eprintln!(
+        "[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} db_path=\"{}\"",
+        args.cwd, args.project, args.invariants, db_path
+    );
 
     let db = Database::new(&db_path)?;
     eprintln!("[DEBUG] main::database_created path=\"{}\"", db_path);
 
     let project = db.get_or_create_project(&args.project, args.invariants)?;
-    eprintln!("[DEBUG] main::project id={} name=\"{}\" invariants={}", project.id, project.name, project.number_invariants);
+    eprintln!(
+        "[DEBUG] main::project id={} name=\"{}\" invariants={}",
+        project.id, project.name, project.number_invariants
+    );
 
     let tools = SynthesisTools::new(
         args.cwd,
@@ -54,7 +60,10 @@ async fn main() -> anyhow::Result<()> {
         project.id,
     );
 
-    eprintln!("[DEBUG] main::tools_created cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}", tools.cwd, tools.db_path, tools.project_name, tools.number_invariants, tools.project_id);
+    eprintln!(
+        "[DEBUG] main::tools_created cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}",
+        tools.cwd, tools.db_path, tools.project_name, tools.number_invariants, tools.project_id
+    );
 
     let service = tools.serve(stdio()).await?;
     eprintln!("[DEBUG] main::server_listening transport=stdio");

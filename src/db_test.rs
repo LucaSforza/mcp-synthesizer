@@ -38,7 +38,15 @@ fn test_record_trial_failed_compilation() {
     let proj = db.get_or_create_project("p", 3).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
-        .record_trial(tr.id, 1, None, "failed_compilation", 0, Some("err"), proj.number_invariants)
+        .record_trial(
+            tr.id,
+            1,
+            None,
+            "failed_compilation",
+            0,
+            Some("err"),
+            proj.number_invariants,
+        )
         .unwrap();
     assert_eq!(trial.test_run_id, tr.id);
     assert_eq!(trial.iteration, 1);
@@ -54,7 +62,15 @@ fn test_record_trial_succeeded_full() {
     let proj = db.get_or_create_project("p", 3).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
-        .record_trial(tr.id, 1, Some(50000), "succeeded_full", 0, None, proj.number_invariants)
+        .record_trial(
+            tr.id,
+            1,
+            Some(50000),
+            "succeeded_full",
+            0,
+            None,
+            proj.number_invariants,
+        )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_full");
     assert_eq!(trial.gas_of_implementation, Some(50000));
@@ -68,7 +84,15 @@ fn test_record_trial_succeeded_partial() {
     let proj = db.get_or_create_project("p", 5).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
-        .record_trial(tr.id, 1, Some(30000), "succeeded_partial", 2, None, proj.number_invariants)
+        .record_trial(
+            tr.id,
+            1,
+            Some(30000),
+            "succeeded_partial",
+            2,
+            None,
+            proj.number_invariants,
+        )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_partial");
     assert_eq!(trial.not_proved_invariants, 2);
@@ -81,8 +105,16 @@ fn test_invariants_constraint() {
     let proj = db.get_or_create_project("p", 3).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
     // 5 unproven > 3 invariants → should panic
-    db.record_trial(tr.id, 1, None, "succeeded_partial", 5, None, proj.number_invariants)
-        .unwrap();
+    db.record_trial(
+        tr.id,
+        1,
+        None,
+        "succeeded_partial",
+        5,
+        None,
+        proj.number_invariants,
+    )
+    .unwrap();
 }
 
 #[test]
@@ -135,11 +167,14 @@ fn test_get_metrics_aggregation() {
     db.increment_compilation_passed(tr1.id).unwrap();
     db.increment_compilation_passed(tr1.id).unwrap();
     db.increment_compilation_not_passed(tr1.id).unwrap();
-    db.record_trial(tr1.id, 1, None, "failed_compilation", 0, Some("err"), 5).unwrap();
+    db.record_trial(tr1.id, 1, None, "failed_compilation", 0, Some("err"), 5)
+        .unwrap();
 
     // tr2: 1 succeeded_full with gas
-    db.record_trial(tr2.id, 1, Some(100000), "succeeded_full", 0, None, 5).unwrap();
-    db.record_trial(tr2.id, 2, Some(90000), "succeeded_partial", 2, None, 5).unwrap();
+    db.record_trial(tr2.id, 1, Some(100000), "succeeded_full", 0, None, 5)
+        .unwrap();
+    db.record_trial(tr2.id, 2, Some(90000), "succeeded_partial", 2, None, 5)
+        .unwrap();
 
     let metrics = db.get_metrics(proj.id).unwrap();
     assert_eq!(metrics.compilation_passed, 2);
