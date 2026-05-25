@@ -44,6 +44,15 @@ impl SynthesisTools {
     }
 }
 
+impl SynthesisTools {
+    fn next_iteration(&self) -> i32 {
+        self.db.lock().ok()
+            .and_then(|db| db.get_max_iteration(self.project_id).ok())
+            .map(|n| n + 1)
+            .unwrap_or(1)
+    }
+}
+
 #[tool_router(server_handler)]
 impl SynthesisTools {
     #[tool(
@@ -123,10 +132,36 @@ impl SynthesisTools {
             String::from_utf8_lossy(&output.stdout).to_string()
                 + &String::from_utf8_lossy(&output.stderr).to_string();
 
+        let iteration = self.next_iteration();
+
         if output.status.success() {
+            self.db.lock().ok().and_then(|db| {
+                db.record_trial(
+                    self.test_run_id,
+                    iteration,
+                    None,
+                    "succeeded_fuzzing",
+                    0,
+                    None,
+                    self.number_invariants,
+                    false,
+                ).ok()
+            });
             eprintln!("[DEBUG] tools::forge_test::ok status=success output_len={}", combined.len());
             Ok(format!("Tests passed.\n{}", combined))
         } else {
+            self.db.lock().ok().and_then(|db| {
+                db.record_trial(
+                    self.test_run_id,
+                    iteration,
+                    None,
+                    "failed_fuzzing",
+                    0,
+                    Some(&combined),
+                    self.number_invariants,
+                    false,
+                ).ok()
+            });
             eprintln!("[DEBUG] tools::forge_test::err status=failed output_len={}", combined.len());
             Err(format!("Tests failed.\n{}", combined))
         }

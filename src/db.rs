@@ -30,6 +30,7 @@ pub struct SynthesisTrial {
     pub result_type: String,
     pub not_proved_invariants: i32,
     pub failure_detail: Option<String>,
+    pub is_full_synthesis: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -78,13 +79,60 @@ impl Database {
                 test_run_id INTEGER NOT NULL REFERENCES test_run(id),
                 iteration INTEGER NOT NULL,
                 gas_of_implementation INTEGER,
-                result_type TEXT NOT NULL CHECK(result_type IN ('failed_compilation', 'failed_fuzzing', 'failed_halmos', 'succeeded_partial', 'succeeded_full')),
+                result_type TEXT NOT NULL CHECK(result_type IN ('failed_compilation', 'failed_fuzzing', 'succeeded_fuzzing', 'failed_halmos', 'succeeded_partial', 'succeeded_full')),
                 not_proved_invariants INTEGER DEFAULT 0,
                 failure_detail TEXT,
+                is_full_synthesis INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             ",
         )?;
+
+        // Migration for existing DBs: add is_full_synthesis column if missing
+        if self.conn.prepare("SELECT is_full_synthesis FROM synthesis_trial LIMIT 0").is_err() {
+            self.conn.execute_batch(
+                "ALTER TABLE synthesis_trial ADD COLUMN is_full_synthesis INTEGER NOT NULL DEFAULT 0;"
+            )?;
+            eprintln!("[DEBUG] db::run_migrations add_column=is_full_synthesis");
+        }
+
+        // Migration for existing DBs: expand CHECK constraint to include 'succeeded_fuzzing'
+        // Probe by attempting a temp insert; if CHECK rejects it, recreate the table
+        let check_ok = self.conn.execute(
+            "INSERT INTO synthesis_trial (test_run_id, iteration, result_type, is_full_synthesis) VALUES (-999, 0, 'succeeded_fuzzing', 0)",
+            [],
+        );
+        if check_ok.is_err() {
+            eprintln!("[DEBUG] db::run_migrations recreate_table=old_check_constraint_detected");
+            self.conn.execute_batch(
+                "ALTER TABLE synthesis_trial RENAME TO synthesis_trial_old;
+
+                CREATE TABLE synthesis_trial (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    test_run_id INTEGER NOT NULL REFERENCES test_run(id),
+                    iteration INTEGER NOT NULL,
+                    gas_of_implementation INTEGER,
+                    result_type TEXT NOT NULL CHECK(result_type IN ('failed_compilation', 'failed_fuzzing', 'succeeded_fuzzing', 'failed_halmos', 'succeeded_partial', 'succeeded_full')),
+                    not_proved_invariants INTEGER DEFAULT 0,
+                    failure_detail TEXT,
+                    is_full_synthesis INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                INSERT INTO synthesis_trial
+                    SELECT id, test_run_id, iteration, gas_of_implementation,
+                           result_type, not_proved_invariants, failure_detail,
+                           is_full_synthesis, created_at
+                    FROM synthesis_trial_old;
+
+                DROP TABLE synthesis_trial_old;"
+            )?;
+            eprintln!("[DEBUG] db::run_migrations::check_constraint_expanded");
+        } else {
+            // Clean up the probe row
+            self.conn.execute("DELETE FROM synthesis_trial WHERE test_run_id = -999", [])?;
+        }
+
         eprintln!("[DEBUG] db::run_migrations::ok tables=[project,test_run,synthesis_trial]");
         Ok(())
     }
@@ -156,9 +204,10 @@ impl Database {
         not_proved_invariants: i32,
         failure_detail: Option<&str>,
         project_number_invariants: i32,
+        is_full_synthesis: bool,
     ) -> SqlResult<SynthesisTrial> {
-        eprintln!("[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={}",
-            test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, project_number_invariants);
+        eprintln!("[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={} is_full_synthesis={}",
+            test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, project_number_invariants, is_full_synthesis);
 
         // Check succeeded constraint: only the last trial can be succeeded
         if result_type.starts_with("succeeded") {
@@ -191,11 +240,11 @@ impl Database {
         }
 
         self.conn.execute(
-            "INSERT INTO synthesis_trial (test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail],
+            "INSERT INTO synthesis_trial (test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis as i32],
         )?;
         let id = self.conn.last_insert_rowid();
-        eprintln!("[DEBUG] db::record_trial::ok trial_id={} sql=\"INSERT INTO synthesis_trial (...)\"", id);
+        eprintln!("[DEBUG] db::record_trial::ok trial_id={}", id);
         Ok(SynthesisTrial {
             id,
             test_run_id,
@@ -204,6 +253,7 @@ impl Database {
             result_type: result_type.to_string(),
             not_proved_invariants,
             failure_detail: failure_detail.map(|s| s.to_string()),
+            is_full_synthesis,
         })
     }
 

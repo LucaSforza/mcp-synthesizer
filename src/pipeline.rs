@@ -186,6 +186,7 @@ impl SynthesisPipeline {
                     0,
                     Some(&output),
                     self.project_number_invariants,
+                    true,
                 );
                 eprintln!(
                     "[DEBUG] pipeline::stage_build::fail passed=false duration={:?} compilation_not_passed=incremented trial_recorded=failed_compilation",
@@ -211,6 +212,7 @@ impl SynthesisPipeline {
                     0,
                     Some(&e),
                     self.project_number_invariants,
+                    true,
                 );
                 eprintln!(
                     "[DEBUG] pipeline::stage_build::err error=\"{}\" duration={:?} compilation_not_passed=incremented trial_recorded=failed_compilation",
@@ -264,6 +266,7 @@ impl SynthesisPipeline {
                     0,
                     Some(&output),
                     self.project_number_invariants,
+                    true,
                 );
                 VerificationReport {
                     stage: "test".into(),
@@ -287,6 +290,7 @@ impl SynthesisPipeline {
                     0,
                     Some(&e),
                     self.project_number_invariants,
+                    true,
                 );
                 VerificationReport {
                     stage: "test".into(),
@@ -331,6 +335,7 @@ impl SynthesisPipeline {
                     0,
                     None,
                     self.project_number_invariants,
+                    true,
                 );
                 let metrics = self.db.get_metrics(self.project_id).ok();
                 eprintln!(
@@ -367,6 +372,7 @@ impl SynthesisPipeline {
                         0,
                         Some(&output),
                         self.project_number_invariants,
+                        true,
                     );
                     let metrics = self.db.get_metrics(self.project_id).ok();
                     eprintln!(
@@ -393,6 +399,7 @@ impl SynthesisPipeline {
                         not_proved,
                         None,
                         self.project_number_invariants,
+                        true,
                     );
                     let metrics = self.db.get_metrics(self.project_id).ok();
                     eprintln!(
@@ -422,6 +429,7 @@ impl SynthesisPipeline {
                     0,
                     Some(&e),
                     self.project_number_invariants,
+                    true,
                 );
                 eprintln!(
                     "[DEBUG] pipeline::stage_halmos::err error=\"{}\" trial_recorded=failed_halmos duration={:?}",
