@@ -195,14 +195,32 @@ fn test_get_metrics_aggregation() {
     db.increment_compilation_passed(tr1.id).unwrap();
     db.increment_compilation_passed(tr1.id).unwrap();
     db.increment_compilation_not_passed(tr1.id).unwrap();
-    db.record_trial(tr1.id, 1, None, "failed_compilation", 0, Some("err"), 5, false)
-        .unwrap();
+    db.record_trial(
+        tr1.id,
+        1,
+        None,
+        "failed_compilation",
+        0,
+        Some("err"),
+        5,
+        false,
+    )
+    .unwrap();
 
     // tr2: 1 succeeded_full with gas
     db.record_trial(tr2.id, 1, Some(100000), "succeeded_full", 0, None, 5, false)
         .unwrap();
-    db.record_trial(tr2.id, 2, Some(90000), "succeeded_partial", 2, None, 5, false)
-        .unwrap();
+    db.record_trial(
+        tr2.id,
+        2,
+        Some(90000),
+        "succeeded_partial",
+        2,
+        None,
+        5,
+        false,
+    )
+    .unwrap();
 
     let metrics = db.get_metrics(proj.id).unwrap();
     assert_eq!(metrics.compilation_passed, 2);
@@ -231,8 +249,17 @@ fn test_get_max_iteration_with_trials() {
     let tr2 = db.create_test_run(proj.id).unwrap();
 
     // tr1: iterations 1, 2
-    db.record_trial(tr1.id, 1, None, "failed_compilation", 0, Some("err"), 3, false)
-        .unwrap();
+    db.record_trial(
+        tr1.id,
+        1,
+        None,
+        "failed_compilation",
+        0,
+        Some("err"),
+        3,
+        false,
+    )
+    .unwrap();
     db.record_trial(tr1.id, 2, Some(50000), "succeeded_full", 0, None, 3, false)
         .unwrap();
 

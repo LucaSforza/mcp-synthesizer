@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use rusqlite::{Connection, Result as SqlResult, params};
+use rusqlite::{params, Connection, Result as SqlResult};
 
 pub struct Database {
     conn: Connection,
@@ -89,7 +89,11 @@ impl Database {
         )?;
 
         // Migration for existing DBs: add is_full_synthesis column if missing
-        if self.conn.prepare("SELECT is_full_synthesis FROM synthesis_trial LIMIT 0").is_err() {
+        if self
+            .conn
+            .prepare("SELECT is_full_synthesis FROM synthesis_trial LIMIT 0")
+            .is_err()
+        {
             self.conn.execute_batch(
                 "ALTER TABLE synthesis_trial ADD COLUMN is_full_synthesis INTEGER NOT NULL DEFAULT 0;"
             )?;
@@ -130,7 +134,8 @@ impl Database {
             eprintln!("[DEBUG] db::run_migrations::check_constraint_expanded");
         } else {
             // Clean up the probe row
-            self.conn.execute("DELETE FROM synthesis_trial WHERE test_run_id = -999", [])?;
+            self.conn
+                .execute("DELETE FROM synthesis_trial WHERE test_run_id = -999", [])?;
         }
 
         eprintln!("[DEBUG] db::run_migrations::ok tables=[project,test_run,synthesis_trial]");
@@ -138,7 +143,10 @@ impl Database {
     }
 
     pub fn get_or_create_project(&self, name: &str, number_invariants: i32) -> SqlResult<Project> {
-        eprintln!("[DEBUG] db::get_or_create_project name=\"{}\" number_invariants={}", name, number_invariants);
+        eprintln!(
+            "[DEBUG] db::get_or_create_project name=\"{}\" number_invariants={}",
+            name, number_invariants
+        );
         let existing = self.conn.query_row(
             "SELECT id, name, number_invariants FROM project WHERE name = ?1",
             params![name],
@@ -206,8 +214,16 @@ impl Database {
         project_number_invariants: i32,
         is_full_synthesis: bool,
     ) -> SqlResult<SynthesisTrial> {
-        eprintln!("[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={} is_full_synthesis={}",
-            test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, project_number_invariants, is_full_synthesis);
+        eprintln!(
+            "[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={} is_full_synthesis={}",
+            test_run_id,
+            iteration,
+            gas_of_implementation,
+            result_type,
+            not_proved_invariants,
+            project_number_invariants,
+            is_full_synthesis
+        );
 
         // Check succeeded constraint: only the last trial can be succeeded
         if result_type.starts_with("succeeded") {
@@ -216,7 +232,10 @@ impl Database {
                 params![test_run_id, iteration],
                 |row| row.get(0),
             )?;
-            eprintln!("[DEBUG] db::record_trial::check_succeeded has_later_trial={}", has_later_trial);
+            eprintln!(
+                "[DEBUG] db::record_trial::check_succeeded has_later_trial={}",
+                has_later_trial
+            );
             if !has_later_trial {
                 // Check that prior trials are all failed
                 let _prior_non_failed: i32 = self.conn.query_row(
@@ -266,12 +285,18 @@ impl Database {
             params![project_id],
             |row| row.get(0),
         )?;
-        eprintln!("[DEBUG] db::get_max_iteration project_id={} max={}", project_id, max);
+        eprintln!(
+            "[DEBUG] db::get_max_iteration project_id={} max={}",
+            project_id, max
+        );
         Ok(max)
     }
 
     pub fn increment_compilation_passed(&self, test_run_id: i64) -> SqlResult<()> {
-        eprintln!("[DEBUG] db::increment_compilation_passed test_run_id={}", test_run_id);
+        eprintln!(
+            "[DEBUG] db::increment_compilation_passed test_run_id={}",
+            test_run_id
+        );
         self.conn.execute(
             "UPDATE test_run SET compilation_passed = compilation_passed + 1 WHERE id = ?1",
             params![test_run_id],
@@ -280,7 +305,10 @@ impl Database {
     }
 
     pub fn increment_compilation_not_passed(&self, test_run_id: i64) -> SqlResult<()> {
-        eprintln!("[DEBUG] db::increment_compilation_not_passed test_run_id={}", test_run_id);
+        eprintln!(
+            "[DEBUG] db::increment_compilation_not_passed test_run_id={}",
+            test_run_id
+        );
         self.conn.execute(
             "UPDATE test_run SET compilation_not_passed = compilation_not_passed + 1 WHERE id = ?1",
             params![test_run_id],
@@ -302,7 +330,10 @@ impl Database {
             },
         );
         match &result {
-            Ok(p) => eprintln!("[DEBUG] db::get_project::ok id={} name=\"{}\" invariants={}", p.id, p.name, p.number_invariants),
+            Ok(p) => eprintln!(
+                "[DEBUG] db::get_project::ok id={} name=\"{}\" invariants={}",
+                p.id, p.name, p.number_invariants
+            ),
             Err(e) => eprintln!("[DEBUG] db::get_project::err error=\"{}\"", e),
         }
         result
@@ -400,8 +431,15 @@ impl Database {
         };
         eprintln!(
             "[DEBUG] db::get_metrics::ok project_id={} median_gas={:?} peak_gas={:?} comp_passed={} comp_not_passed={} total_trials={} proven={} unproven={} succeeded_at_iter={}",
-            project_id, metrics.median_gas, metrics.peak_gas, metrics.compilation_passed, metrics.compilation_not_passed,
-            metrics.total_trials, metrics.proven_invariants, metrics.unproven_invariants, metrics.succeeded_iterations
+            project_id,
+            metrics.median_gas,
+            metrics.peak_gas,
+            metrics.compilation_passed,
+            metrics.compilation_not_passed,
+            metrics.total_trials,
+            metrics.proven_invariants,
+            metrics.unproven_invariants,
+            metrics.succeeded_iterations
         );
         Ok(metrics)
     }

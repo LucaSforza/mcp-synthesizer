@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use rmcp::{tool, tool_router};
 
 use crate::db::Database;
-use crate::pipeline::{SynthesisPipeline, extract_forge_gas_json};
+use crate::pipeline::{extract_forge_gas_json, SynthesisPipeline};
 
 pub struct SynthesisTools {
     pub cwd: String,
@@ -26,7 +26,10 @@ impl SynthesisTools {
         number_invariants: i32,
         project_id: i64,
     ) -> Self {
-        eprintln!("[DEBUG] tools::new cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}", cwd, db_path, project_name, number_invariants, project_id);
+        eprintln!(
+            "[DEBUG] tools::new cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}",
+            cwd, db_path, project_name, number_invariants, project_id
+        );
         let test_run = db
             .create_test_run(project_id)
             .expect("Failed to create test run for standalone tools");
@@ -46,7 +49,9 @@ impl SynthesisTools {
 
 impl SynthesisTools {
     fn next_iteration(&self) -> i32 {
-        self.db.lock().ok()
+        self.db
+            .lock()
+            .ok()
             .and_then(|db| db.get_max_iteration(self.project_id).ok())
             .map(|n| n + 1)
             .unwrap_or(1)
@@ -57,7 +62,11 @@ impl SynthesisTools {
 impl SynthesisTools {
     #[tool(
         description = "Install Foundry project dependencies. Runs `forge install` in the project directory.",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     fn forge_install(&self) -> Result<String, String> {
         eprintln!("[DEBUG] tools::forge_install cwd=\"{}\"", self.cwd);
@@ -70,22 +79,31 @@ impl SynthesisTools {
                 format!("Failed to execute forge install: {}", e)
             })?;
 
-        let combined =
-            String::from_utf8_lossy(&output.stdout).to_string()
-                + &String::from_utf8_lossy(&output.stderr).to_string();
+        let combined = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr).to_string();
 
         if output.status.success() {
-            eprintln!("[DEBUG] tools::forge_install::ok status=success output_len={}", combined.len());
+            eprintln!(
+                "[DEBUG] tools::forge_install::ok status=success output_len={}",
+                combined.len()
+            );
             Ok(combined)
         } else {
-            eprintln!("[DEBUG] tools::forge_install::err status=failed output_len={}", combined.len());
+            eprintln!(
+                "[DEBUG] tools::forge_install::err status=failed output_len={}",
+                combined.len()
+            );
             Err(format!("forge install failed.\n{}", combined))
         }
     }
 
     #[tool(
         description = "Compile the Foundry project with `forge build`. Returns compiler output. Captures compilation success/failure telemetry.",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     fn forge_build(&self) -> Result<String, String> {
         eprintln!("[DEBUG] tools::forge_build cwd=\"{}\"", self.cwd);
@@ -98,24 +116,39 @@ impl SynthesisTools {
                 format!("Failed to execute forge build: {}", e)
             })?;
 
-        let combined =
-            String::from_utf8_lossy(&output.stdout).to_string()
-                + &String::from_utf8_lossy(&output.stderr).to_string();
+        let combined = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr).to_string();
 
         if output.status.success() {
-            self.db.lock().ok().and_then(|db| db.increment_compilation_passed(self.test_run_id).ok());
-            eprintln!("[DEBUG] tools::forge_build::ok status=success output_len={}", combined.len());
+            self.db
+                .lock()
+                .ok()
+                .and_then(|db| db.increment_compilation_passed(self.test_run_id).ok());
+            eprintln!(
+                "[DEBUG] tools::forge_build::ok status=success output_len={}",
+                combined.len()
+            );
             Ok(format!("Build passed.\n{}", combined))
         } else {
-            self.db.lock().ok().and_then(|db| db.increment_compilation_not_passed(self.test_run_id).ok());
-            eprintln!("[DEBUG] tools::forge_build::err status=failed output_len={}", combined.len());
+            self.db
+                .lock()
+                .ok()
+                .and_then(|db| db.increment_compilation_not_passed(self.test_run_id).ok());
+            eprintln!(
+                "[DEBUG] tools::forge_build::err status=failed output_len={}",
+                combined.len()
+            );
             Err(format!("Build failed.\n{}", combined))
         }
     }
 
     #[tool(
         description = "Run Foundry unit and fuzzy tests with `forge test`. Returns detailed failure logs if assertions or fuzzing invariants fail.",
-        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true)
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
     )]
     fn forge_test(&self) -> Result<String, String> {
         eprintln!("[DEBUG] tools::forge_test cwd=\"{}\"", self.cwd);
@@ -128,9 +161,8 @@ impl SynthesisTools {
                 format!("Failed to execute forge test: {}", e)
             })?;
 
-        let combined =
-            String::from_utf8_lossy(&output.stdout).to_string()
-                + &String::from_utf8_lossy(&output.stderr).to_string();
+        let combined = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr).to_string();
 
         let iteration = self.next_iteration();
         let gas = extract_forge_gas_json(&combined);
@@ -146,9 +178,14 @@ impl SynthesisTools {
                     None,
                     self.number_invariants,
                     false,
-                ).ok()
+                )
+                .ok()
             });
-            eprintln!("[DEBUG] tools::forge_test::ok status=success output_len={} gas={:?}", combined.len(), gas);
+            eprintln!(
+                "[DEBUG] tools::forge_test::ok status=success output_len={} gas={:?}",
+                combined.len(),
+                gas
+            );
             Ok(format!("Tests passed.\n{}", combined))
         } else {
             self.db.lock().ok().and_then(|db| {
@@ -161,19 +198,31 @@ impl SynthesisTools {
                     Some(&combined),
                     self.number_invariants,
                     false,
-                ).ok()
+                )
+                .ok()
             });
-            eprintln!("[DEBUG] tools::forge_test::err status=failed output_len={} gas={:?}", combined.len(), gas);
+            eprintln!(
+                "[DEBUG] tools::forge_test::err status=failed output_len={} gas={:?}",
+                combined.len(),
+                gas
+            );
             Err(format!("Tests failed.\n{}", combined))
         }
     }
 
     #[tool(
         description = "Run the full synthesis pipeline: compile with forge build, run unit/fuzzy tests with forge test, then verify with Halmos. Records every attempt in the database and returns a verification report with gas metrics, test results, and invariant proof status.",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     fn run_synthesis(&self) -> Result<String, String> {
-        eprintln!("[DEBUG] tools::run_synthesis cwd=\"{}\" project=\"{}\" invariants={}", self.cwd, self.project_name, self.number_invariants);
+        eprintln!(
+            "[DEBUG] tools::run_synthesis cwd=\"{}\" project=\"{}\" invariants={}",
+            self.cwd, self.project_name, self.number_invariants
+        );
         let mut pipe_lock = self
             .pipeline
             .lock()
@@ -181,21 +230,33 @@ impl SynthesisTools {
 
         if pipe_lock.is_none() {
             eprintln!("[DEBUG] tools::run_synthesis::lazy_init creating pipeline");
-            *pipe_lock = Some(SynthesisPipeline::new(
-                self.cwd.clone(),
-                Database::new(&self.db_path)
-                    .map_err(|e| format!("Failed to open DB: {}", e))?,
-                self.project_id,
-                self.project_name.clone(),
-                self.number_invariants,
-                self.test_run_id,
-            ).map_err(|e| format!("Failed to init pipeline: {}", e))?);
+            *pipe_lock = Some(
+                SynthesisPipeline::new(
+                    self.cwd.clone(),
+                    Database::new(&self.db_path)
+                        .map_err(|e| format!("Failed to open DB: {}", e))?,
+                    self.project_id,
+                    self.project_name.clone(),
+                    self.number_invariants,
+                    self.test_run_id,
+                )
+                .map_err(|e| format!("Failed to init pipeline: {}", e))?,
+            );
         }
 
         let pipeline = pipe_lock.as_mut().unwrap();
-        eprintln!("[DEBUG] tools::run_synthesis::before_run iteration={}", pipeline.iteration);
+        eprintln!(
+            "[DEBUG] tools::run_synthesis::before_run iteration={}",
+            pipeline.iteration
+        );
         let report = pipeline.run();
-        eprintln!("[DEBUG] tools::run_synthesis::report iteration={} stage={} passed={} has_metrics={}", pipeline.iteration, report.stage, report.passed, report.metrics.is_some());
+        eprintln!(
+            "[DEBUG] tools::run_synthesis::report iteration={} stage={} passed={} has_metrics={}",
+            pipeline.iteration,
+            report.stage,
+            report.passed,
+            report.metrics.is_some()
+        );
 
         let mut result = format!(
             "=== Synthesis Pipeline Report ===\n\
@@ -233,10 +294,16 @@ impl SynthesisTools {
         }
 
         if report.passed {
-            eprintln!("[DEBUG] tools::run_synthesis::ok iteration={} stage={}", pipeline.iteration, report.stage);
+            eprintln!(
+                "[DEBUG] tools::run_synthesis::ok iteration={} stage={}",
+                pipeline.iteration, report.stage
+            );
             Ok(result)
         } else {
-            eprintln!("[DEBUG] tools::run_synthesis::err iteration={} stage={}", pipeline.iteration, report.stage);
+            eprintln!(
+                "[DEBUG] tools::run_synthesis::err iteration={} stage={}",
+                pipeline.iteration, report.stage
+            );
             Err(result)
         }
     }

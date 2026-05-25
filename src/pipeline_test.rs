@@ -228,8 +228,17 @@ fn test_iteration_resume_from_db() {
 
     // Seed 2 trials across 2 test runs
     let tr = db.create_test_run(proj.id).unwrap();
-    db.record_trial(tr.id, 1, None, "failed_compilation", 0, Some("err"), 3, false)
-        .unwrap();
+    db.record_trial(
+        tr.id,
+        1,
+        None,
+        "failed_compilation",
+        0,
+        Some("err"),
+        3,
+        false,
+    )
+    .unwrap();
     db.record_trial(tr.id, 3, Some(50000), "succeeded_full", 0, None, 3, false)
         .unwrap();
 
