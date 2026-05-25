@@ -188,6 +188,34 @@ fn test_get_metrics_aggregation() {
 }
 
 #[test]
+fn test_get_max_iteration_empty_db() {
+    let db = setup_db();
+    let proj = db.get_or_create_project("p", 3).unwrap();
+    let max = db.get_max_iteration(proj.id).unwrap();
+    assert_eq!(max, 0);
+}
+
+#[test]
+fn test_get_max_iteration_with_trials() {
+    let db = setup_db();
+    let proj = db.get_or_create_project("p", 3).unwrap();
+    let tr1 = db.create_test_run(proj.id).unwrap();
+    let tr2 = db.create_test_run(proj.id).unwrap();
+
+    // tr1: iterations 1, 2
+    db.record_trial(tr1.id, 1, None, "failed_compilation", 0, Some("err"), 3)
+        .unwrap();
+    db.record_trial(tr1.id, 2, Some(50000), "succeeded_full", 0, None, 3)
+        .unwrap();
+
+    // tr2: iteration 5
+    db.record_trial(tr2.id, 5, None, "failed_fuzzing", 0, Some("fail"), 3)
+        .unwrap();
+
+    assert_eq!(db.get_max_iteration(proj.id).unwrap(), 5);
+}
+
+#[test]
 fn test_result_type_check_constraint() {
     let db = setup_db();
     let proj = db.get_or_create_project("p", 1).unwrap();

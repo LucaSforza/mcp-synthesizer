@@ -24,7 +24,8 @@ fn setup(project_invariants: i32) -> TestCtx {
         proj.id,
         "test".into(),
         project_invariants,
-    );
+    )
+    .expect("Failed to create pipeline");
     pipeline.mock_commands = Some(Vec::new());
 
     TestCtx {
@@ -212,6 +213,44 @@ fn test_extract_not_proved() {
     assert_eq!(ctx.pipeline.extract_not_proved("not proved count: 1"), 1);
     assert_eq!(ctx.pipeline.extract_not_proved("all proved"), 5);
     assert_eq!(ctx.pipeline.extract_not_proved(""), 5);
+}
+
+#[test]
+fn test_iteration_resume_from_db() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("test.db");
+    let path_str = path.to_str().unwrap().to_string();
+
+    let db = Database::new(&path_str).expect("DB");
+    let proj = db.get_or_create_project("resume-test", 3).unwrap();
+
+    // Seed 2 trials across 2 test runs
+    let tr = db.create_test_run(proj.id).unwrap();
+    db.record_trial(tr.id, 1, None, "failed_compilation", 0, Some("err"), 3)
+        .unwrap();
+    db.record_trial(tr.id, 3, Some(50000), "succeeded_full", 0, None, 3)
+        .unwrap();
+
+    // New pipeline should start iteration at max (3)
+    let mut pipeline = SynthesisPipeline::new(
+        "/tmp".into(),
+        Database::new(&path_str).expect("Pipeline DB 2"),
+        proj.id,
+        "resume-test".into(),
+        3,
+    )
+    .expect("Pipeline");
+
+    assert_eq!(pipeline.iteration, 3);
+
+    // Run — should become 4
+    pipeline.mock_commands = Some(Vec::new());
+    push_ok(&mut pipeline, "build ok");
+    push_ok(&mut pipeline, "tests pass");
+    push_ok(&mut pipeline, "halmos ok");
+    let report = pipeline.run();
+    assert!(report.passed);
+    assert_eq!(pipeline.iteration, 4);
 }
 
 #[test]

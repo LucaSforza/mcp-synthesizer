@@ -146,7 +146,7 @@ impl SynthesisTools {
                 self.project_id,
                 self.project_name.clone(),
                 self.number_invariants,
-            ));
+            ).map_err(|e| format!("Failed to init pipeline: {}", e))?);
         }
 
         let pipeline = pipe_lock.as_mut().unwrap();

@@ -37,33 +37,33 @@ impl SynthesisPipeline {
         project_id: i64,
         project_name: String,
         project_number_invariants: i32,
-    ) -> Self {
+    ) -> Result<Self, String> {
         eprintln!(
             "[DEBUG] pipeline::new cwd=\"{}\" project_id={} project=\"{}\" invariants={}",
             cwd, project_id, project_name, project_number_invariants
         );
         let test_run_id = db
             .create_test_run(project_id)
-            .expect("Failed to create test run");
+            .map_err(|e| format!("Failed to create test run: {}", e))?;
+        let max_iteration = db
+            .get_max_iteration(project_id)
+            .map_err(|e| format!("Failed to get max iteration: {}", e))?;
         eprintln!(
-            "[DEBUG] pipeline::new::test_run_created test_run_id={}",
-            test_run_id.id
+            "[DEBUG] pipeline::new::test_run_created test_run_id={} max_iteration={}",
+            test_run_id.id, max_iteration
         );
-        Self {
+        Ok(Self {
             cwd,
             db,
             project_id,
             _project_name: project_name,
             project_number_invariants,
             test_run_id: test_run_id.id,
-            iteration: 0, // TODO: bisogna prendere l'iterazione massima trovata nel db in quel
-            // progetto. Ergo: preso il progetto, bisogna vedere se c'è un testing.
-            // Se esso esiste allora prendi l'iterazione più grande che trovi e
-            // assegnala qua quell'iterazione
+            iteration: max_iteration,
             forge_gas: None,
             #[cfg(test)]
             mock_commands: None,
-        }
+        })
     }
 
     fn run_command(
