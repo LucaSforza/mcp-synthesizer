@@ -22,6 +22,7 @@ pub struct SynthesisPipeline {
     pub project_number_invariants: i32,
     pub test_run_id: i64,
     pub iteration: i32,
+    pub forge_gas: Option<i64>,
     #[cfg(test)]
     pub mock_commands: Option<Vec<Result<(String, bool), String>>>,
 }
@@ -47,6 +48,7 @@ impl SynthesisPipeline {
             project_number_invariants,
             test_run_id: test_run_id.id,
             iteration: 0,
+            forge_gas: None,
             #[cfg(test)]
             mock_commands: None,
         }
@@ -181,13 +183,14 @@ impl SynthesisPipeline {
         let cwd = self.cwd.clone();
         match self.run_command("forge", &["test", "-vvv"], &cwd) {
             Ok((output, true)) => {
-                eprintln!("[DEBUG] pipeline::stage_test::ok passed=true duration={:?}", start.elapsed());
+                self.forge_gas = SynthesisPipeline::extract_forge_gas(&output);
+                eprintln!("[DEBUG] pipeline::stage_test::ok passed=true duration={:?} forge_gas={:?}", start.elapsed(), self.forge_gas);
                 VerificationReport {
                     stage: "test".into(),
                     passed: true,
                     output: format!("Tests passed ({:?})\n{}", start.elapsed(), output),
                     metrics: None,
-                    gas_of_implementation: None,
+                    gas_of_implementation: self.forge_gas,
                 }
             }
             Ok((output, false)) => {
@@ -251,7 +254,7 @@ impl SynthesisPipeline {
         ) {
             Ok((output, true)) => {
                 // All proven
-                let gas = self.extract_gas(&output);
+                let gas = self.forge_gas;
                 let _ = self.db.record_trial(
                     self.test_run_id,
                     self.iteration,
@@ -283,7 +286,7 @@ impl SynthesisPipeline {
                     || output_lower.contains("assertion failed");
 
                 if has_counterexample {
-                    let gas = self.extract_gas(&output);
+                    let gas = self.forge_gas;
                     let _ = self.db.record_trial(
                         self.test_run_id,
                         self.iteration,
@@ -304,7 +307,7 @@ impl SynthesisPipeline {
                     }
                 } else {
                     // Timeout / partial proof — accepted under partial model checking
-                    let gas = self.extract_gas(&output);
+                    let gas = self.forge_gas;
                     let not_proved = self.extract_not_proved(&output);
                     let _ = self.db.record_trial(
                         self.test_run_id,
@@ -351,29 +354,48 @@ impl SynthesisPipeline {
         }
     }
 
-    /// Extract gas from forge/halmos output
-    fn extract_gas(&self, output: &str) -> Option<i64> {
-        eprintln!("[DEBUG] pipeline::extract_gas output_len={}", output.len());
-        // Try to find gas numbers in output
+    /// Extract total gas from forge test output.
+    /// Parses `gas: NUMBER` and `μ: NUMBER` (mean gas for fuzz tests), sums all values.
+    fn extract_forge_gas(output: &str) -> Option<i64> {
+        eprintln!("[DEBUG] pipeline::extract_forge_gas output_len={}", output.len());
+        let mut total: i64 = 0;
         for line in output.lines() {
-            if let Some(val) = line
-                .to_lowercase()
-                .split(|c: char| c.is_whitespace() || c == '|')
-                .find_map(|w| {
-                    let w = w.trim();
-                    if w.ends_with("gas") {
-                        w.trim_end_matches("gas").trim().parse::<i64>().ok()
-                    } else {
-                        None
-                    }
-                })
-            {
-                eprintln!("[DEBUG] pipeline::extract_gas::result gas={:?}", Some(val));
-                return Some(val);
+            let lc = line.to_lowercase();
+            // gas: NUMBER e.g. "(gas: 28827)"
+            if let Some(pos) = lc.find("gas:") {
+                let after = &lc[pos + 4..];
+                let num_str: String = after
+                    .chars()
+                    .skip_while(|c| !c.is_numeric())
+                    .take_while(|c| c.is_numeric())
+                    .collect();
+                if let Ok(n) = num_str.parse::<i64>() {
+                    eprintln!("[DEBUG] pipeline::extract_forge_gas::found gas:{} total_before={}", n, total);
+                    total += n;
+                    continue;
+                }
+            }
+            // μ: NUMBER e.g. "(μ: 26767, ...)" — mean gas for fuzz tests
+            if let Some(pos) = lc.find("μ:") {
+                let after = &lc[pos + "μ:".len()..];
+                let num_str: String = after
+                    .chars()
+                    .skip_while(|c| !c.is_numeric())
+                    .take_while(|c| c.is_numeric())
+                    .collect();
+                if let Ok(n) = num_str.parse::<i64>() {
+                    eprintln!("[DEBUG] pipeline::extract_forge_gas::found μ:{} total_before={}", n, total);
+                    total += n;
+                }
             }
         }
-        eprintln!("[DEBUG] pipeline::extract_gas::result gas=None");
-        None
+        if total > 0 {
+            eprintln!("[DEBUG] pipeline::extract_forge_gas::result total={}", total);
+            Some(total)
+        } else {
+            eprintln!("[DEBUG] pipeline::extract_forge_gas::result None");
+            None
+        }
     }
 
     /// Extract number of unproved invariants from halmos output
@@ -505,8 +527,9 @@ mod tests {
     fn test_halmos_succeeded_full() {
         let mut ctx = setup(3);
         push_ok(&mut ctx.pipeline, "build ok");
-        push_ok(&mut ctx.pipeline, "tests pass");
-        push_ok(&mut ctx.pipeline, "halmos: all proved | 50000gas |");
+        // Forge test mock must include gas: format (new source of gas data)
+        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 50000)");
+        push_ok(&mut ctx.pipeline, "halmos: all proved");
         let report = ctx.pipeline.run();
         assert!(report.passed);
         assert_eq!(report.stage, "halmos");
@@ -566,8 +589,8 @@ mod tests {
 
         // Iteration 3: build passes, test passes, halmos proves all
         push_ok(&mut ctx.pipeline, "build ok");
-        push_ok(&mut ctx.pipeline, "tests pass");
-        push_ok(&mut ctx.pipeline, "all good | 30000 gas |");
+        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 30000)");
+        push_ok(&mut ctx.pipeline, "all good");
         let r3 = ctx.pipeline.run();
         assert!(r3.passed);
         assert_eq!(ctx.pipeline.iteration, 3);
@@ -580,13 +603,26 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_gas() {
-        let ctx = setup(1);
-        // Parser requires number directly before "gas" (no space between digits and "gas")
-        assert_eq!(ctx.pipeline.extract_gas("| 12345gas |"), Some(12345));
-        assert_eq!(ctx.pipeline.extract_gas("used 99999gas"), Some(99999));
-        assert_eq!(ctx.pipeline.extract_gas("no gas here"), None);
-        assert_eq!(ctx.pipeline.extract_gas(""), None);
+    fn test_extract_forge_gas() {
+        // Sum of individual test gas
+        let out = "[PASS] test_A() (gas: 1000)\n[PASS] test_B() (gas: 2000)";
+        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(3000));
+
+        // Fuzz test with mean gas (μ)
+        let out = "[PASS] testFuzz(uint256) (runs: 256, μ: 50000, ~: 52579)";
+        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(50000));
+
+        // Mixed: individual gas + fuzz mean
+        let out = "[PASS] test_A() (gas: 1000)\n[PASS] testFuzz(uint256) (μ: 50000)";
+        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(51000));
+
+        // Real-world fuzz test with runs, μ, ~
+        let out = "[PASS] test_SystemInvariants((uint8,uint256,uint256)[4]) (runs: 100000, μ: 1154349, ~: 1221586)";
+        assert_eq!(SynthesisPipeline::extract_forge_gas(out), Some(1154349));
+
+        // No gas
+        assert_eq!(SynthesisPipeline::extract_forge_gas("no gas here"), None);
+        assert_eq!(SynthesisPipeline::extract_forge_gas(""), None);
     }
 
     #[test]
@@ -608,8 +644,8 @@ mod tests {
             ctx.pipeline.run();
         }
         push_ok(&mut ctx.pipeline, "build ok");
-        push_ok(&mut ctx.pipeline, "tests pass");
-        push_ok(&mut ctx.pipeline, "all proven | 75000gas |");
+        push_ok(&mut ctx.pipeline, "[PASS] test_A() (gas: 75000)");
+        push_ok(&mut ctx.pipeline, "all proven");
         ctx.pipeline.run();
 
         let metrics = ctx.db.get_metrics(ctx.pipeline.project_id).unwrap();
