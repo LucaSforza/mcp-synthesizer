@@ -37,20 +37,18 @@ impl SynthesisPipeline {
         project_id: i64,
         project_name: String,
         project_number_invariants: i32,
+        test_run_id: i64,
     ) -> Result<Self, String> {
         eprintln!(
-            "[DEBUG] pipeline::new cwd=\"{}\" project_id={} project=\"{}\" invariants={}",
-            cwd, project_id, project_name, project_number_invariants
+            "[DEBUG] pipeline::new cwd=\"{}\" project_id={} project=\"{}\" invariants={} test_run_id={}",
+            cwd, project_id, project_name, project_number_invariants, test_run_id
         );
-        let test_run_id = db
-            .create_test_run(project_id)
-            .map_err(|e| format!("Failed to create test run: {}", e))?;
         let max_iteration = db
             .get_max_iteration(project_id)
             .map_err(|e| format!("Failed to get max iteration: {}", e))?;
         eprintln!(
-            "[DEBUG] pipeline::new::test_run_created test_run_id={} max_iteration={}",
-            test_run_id.id, max_iteration
+            "[DEBUG] pipeline::new::ok test_run_id={} max_iteration={}",
+            test_run_id, max_iteration
         );
         Ok(Self {
             cwd,
@@ -58,7 +56,7 @@ impl SynthesisPipeline {
             project_id,
             _project_name: project_name,
             project_number_invariants,
-            test_run_id: test_run_id.id,
+            test_run_id,
             iteration: max_iteration,
             forge_gas: None,
             #[cfg(test)]

@@ -187,6 +187,7 @@ impl SynthesisTools {
                 self.project_id,
                 self.project_name.clone(),
                 self.number_invariants,
+                self.test_run_id,
             ).map_err(|e| format!("Failed to init pipeline: {}", e))?);
         }
 

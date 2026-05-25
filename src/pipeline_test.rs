@@ -18,12 +18,14 @@ fn setup(project_invariants: i32) -> TestCtx {
         .get_or_create_project("test", project_invariants)
         .unwrap();
 
+    let tr = db.create_test_run(proj.id).unwrap();
     let mut pipeline = SynthesisPipeline::new(
         "/tmp".into(),
         Database::new(&path_str).expect("Pipeline DB"),
         proj.id,
         "test".into(),
         project_invariants,
+        tr.id,
     )
     .expect("Failed to create pipeline");
     pipeline.mock_commands = Some(Vec::new());
@@ -52,7 +54,7 @@ fn push_fail(pipeline: &mut SynthesisPipeline, output: &str) {
 }
 
 #[test]
-fn test_pipeline_new_creates_test_run() {
+fn test_pipeline_uses_test_run() {
     let ctx = setup(1);
     assert_eq!(ctx.pipeline.iteration, 0);
     assert!(ctx.pipeline.test_run_id > 0);
@@ -238,6 +240,7 @@ fn test_iteration_resume_from_db() {
         proj.id,
         "resume-test".into(),
         3,
+        tr.id,
     )
     .expect("Pipeline");
 
