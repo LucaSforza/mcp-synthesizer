@@ -105,7 +105,7 @@ impl SynthesisPipeline {
         };
 
         let combined = String::from_utf8_lossy(&output.stdout).to_string()
-            + &String::from_utf8_lossy(&output.stderr).to_string();
+            + &String::from_utf8_lossy(&output.stderr);
         let success = output.status.success();
         eprintln!(
             "[DEBUG] pipeline::run_command::ok cmd=\"{}\" exit={:?} stdout_len={} stderr_len={} combined_len={} success={}",
