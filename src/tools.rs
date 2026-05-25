@@ -13,6 +13,7 @@ pub struct SynthesisTools {
     pub project_name: String,
     pub number_invariants: i32,
     pub project_id: i64,
+    pub test_run_id: i64,
     pub pipeline: Mutex<Option<SynthesisPipeline>>,
 }
 
@@ -26,6 +27,10 @@ impl SynthesisTools {
         project_id: i64,
     ) -> Self {
         eprintln!("[DEBUG] tools::new cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}", cwd, db_path, project_name, number_invariants, project_id);
+        let test_run = db
+            .create_test_run(project_id)
+            .expect("Failed to create test run for standalone tools");
+        eprintln!("[DEBUG] tools::new test_run_id={}", test_run.id);
         Self {
             cwd,
             db_path,
@@ -33,6 +38,7 @@ impl SynthesisTools {
             project_name,
             number_invariants,
             project_id,
+            test_run_id: test_run.id,
             pipeline: Mutex::new(None),
         }
     }
@@ -88,11 +94,11 @@ impl SynthesisTools {
                 + &String::from_utf8_lossy(&output.stderr).to_string();
 
         if output.status.success() {
-            self.db.lock().ok().and_then(|db| db.increment_compilation_passed(self.project_id).ok());
+            self.db.lock().ok().and_then(|db| db.increment_compilation_passed(self.test_run_id).ok());
             eprintln!("[DEBUG] tools::forge_build::ok status=success output_len={}", combined.len());
             Ok(format!("Build passed.\n{}", combined))
         } else {
-            self.db.lock().ok().and_then(|db| db.increment_compilation_not_passed(self.project_id).ok());
+            self.db.lock().ok().and_then(|db| db.increment_compilation_not_passed(self.test_run_id).ok());
             eprintln!("[DEBUG] tools::forge_build::err status=failed output_len={}", combined.len());
             Err(format!("Build failed.\n{}", combined))
         }
