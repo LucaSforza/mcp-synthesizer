@@ -237,7 +237,8 @@ fn test_get_metrics_aggregation() {
 fn test_get_max_iteration_empty_db() {
     let db = setup_db();
     let proj = db.get_or_create_project("p", 3).unwrap();
-    let max = db.get_max_iteration(proj.id).unwrap();
+    let tr = db.create_test_run(proj.id).unwrap();
+    let max = db.get_max_iteration(tr.id).unwrap();
     assert_eq!(max, 0);
 }
 
@@ -267,7 +268,8 @@ fn test_get_max_iteration_with_trials() {
     db.record_trial(tr2.id, 5, None, "failed_fuzzing", 0, Some("fail"), 3, false)
         .unwrap();
 
-    assert_eq!(db.get_max_iteration(proj.id).unwrap(), 5);
+    assert_eq!(db.get_max_iteration(tr1.id).unwrap(), 2);
+    assert_eq!(db.get_max_iteration(tr2.id).unwrap(), 5);
 }
 
 #[test]

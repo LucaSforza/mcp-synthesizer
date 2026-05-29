@@ -52,7 +52,7 @@ impl SynthesisTools {
         self.db
             .lock()
             .ok()
-            .and_then(|db| db.get_max_iteration(self.project_id).ok())
+            .and_then(|db| db.get_max_iteration(self.test_run_id).ok())
             .map(|n| n + 1)
             .unwrap_or(1)
     }

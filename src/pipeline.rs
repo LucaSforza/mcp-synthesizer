@@ -44,7 +44,7 @@ impl SynthesisPipeline {
             cwd, project_id, project_name, project_number_invariants, test_run_id
         );
         let max_iteration = db
-            .get_max_iteration(project_id)
+            .get_max_iteration(test_run_id)
             .map_err(|e| format!("Failed to get max iteration: {}", e))?;
         eprintln!(
             "[DEBUG] pipeline::new::ok test_run_id={} max_iteration={}",

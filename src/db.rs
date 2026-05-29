@@ -276,18 +276,17 @@ impl Database {
         })
     }
 
-    pub fn get_max_iteration(&self, project_id: i64) -> SqlResult<i32> {
+    pub fn get_max_iteration(&self, test_run_id: i64) -> SqlResult<i32> {
         let max: i32 = self.conn.query_row(
             "SELECT COALESCE(MAX(st.iteration), 0)
              FROM synthesis_trial st
-             JOIN test_run tr ON st.test_run_id = tr.id
-             WHERE tr.project_id = ?1",
-            params![project_id],
+             WHERE st.test_run_id = ?1",
+            params![test_run_id],
             |row| row.get(0),
         )?;
         eprintln!(
-            "[DEBUG] db::get_max_iteration project_id={} max={}",
-            project_id, max
+            "[DEBUG] db::get_max_iteration test_run_id={} max={}",
+            test_run_id, max
         );
         Ok(max)
     }
