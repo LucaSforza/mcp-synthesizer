@@ -1,6 +1,6 @@
 use clap::Parser;
 use redis::{Client, Commands};
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 #[derive(Parser, Debug)]
 #[command(name = "migrate", about = "Migrate SQLite data to Redis")]
@@ -120,7 +120,7 @@ fn main() -> anyhow::Result<()> {
         if let Some(g) = gas {
             let _: bool = redis.hset(&key, "gas_of_implementation", &g.to_string())?;
         }
-        if let Some(ref detail) = fd {
+        if let Some(detail) = fd {
             let _: bool = redis.hset(&key, "failure_detail", detail.as_str())?;
         }
 

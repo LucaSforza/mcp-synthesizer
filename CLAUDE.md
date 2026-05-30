@@ -12,6 +12,15 @@ This repo lives inside `git_diff_checker` as git submodule (`git@github.com:Luca
 
 This MCP server is the **authorized path** for forge operations and synthesis. When parent stop hook blocks due to missing coverage, it tells agent to use `run_synthesis` here.
 
+## Redis Databases
+
+| DB | Usage | Notes |
+|----|-------|-------|
+| 0  | Real runs | `--redis-url redis://localhost:6379` (default) |
+| 1  | Tests only | `TEST_REDIS_URL=redis://localhost:6379/1` (default in test code) |
+
+Tests use `FLUSHDB` on DB 1 per module — never touch DB 0 real data.
+
 ## Build & Run
 
 ```bash
