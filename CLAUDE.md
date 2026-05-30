@@ -52,11 +52,11 @@ cargo run -- --cwd . --project test --invariants 5 --redis-url redis://localhost
 
 ## Tests
 
-Requires Redis server running (set `TEST_REDIS_URL` env var, default `redis://localhost:6379`). Must run with `--test-threads 1` to avoid FLUSHALL interference between test modules:
+Tests run on Redis DB `1` (never touches DB `0` real data). Uses `FLUSHDB` per module for isolation. Run with `--test-threads 1`:
 
 ```bash
 docker compose up -d
-cargo test -- --test-threads 1
+TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
 
 ## Architecture
 

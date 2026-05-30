@@ -50,5 +50,5 @@ redis-down:
 
 # Run full tests with Redis (single-threaded to avoid FLUSHALL interference)
 test: redis-up
-    cargo test -- --test-threads 1
+    TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
     docker compose down

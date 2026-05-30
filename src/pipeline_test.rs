@@ -7,16 +7,16 @@ struct TestCtx {
 }
 
 fn redis_url() -> String {
-    std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into())
+    std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379/1".into())
 }
 
 fn setup(project_invariants: i32) -> TestCtx {
     let url = redis_url();
 
-    // Flush for isolation
+    // Flush test DB only, never touch real data
     let flush_db = Database::new(&url).expect("flush db");
     let mut conn = flush_db.client.get_connection().expect("conn");
-    let _: () = redis::cmd("FLUSHALL").query(&mut conn).expect("flushall");
+    let _: () = redis::cmd("FLUSHDB").query(&mut conn).expect("flushdb");
     drop(flush_db);
 
     let db = Database::new(&url).expect("DB");
@@ -220,10 +220,10 @@ fn test_extract_not_proved() {
 fn test_iteration_resume_from_db() {
     let url = redis_url();
 
-    // Flush for isolation
+    // Flush test DB only, never touch real data
     let flush_db = Database::new(&url).expect("flush db");
     let mut conn = flush_db.client.get_connection().expect("conn");
-    let _: () = redis::cmd("FLUSHALL").query(&mut conn).expect("flushall");
+    let _: () = redis::cmd("FLUSHDB").query(&mut conn).expect("flushdb");
     drop(flush_db);
 
     let db = Database::new(&url).expect("DB");
