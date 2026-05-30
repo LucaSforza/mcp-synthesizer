@@ -44,7 +44,6 @@ async fn main() -> anyhow::Result<()> {
         "redis" => DbConfig::Redis {
             url: args.redis_url.unwrap_or_else(|| "redis://localhost:6379".into()),
         },
-        #[cfg(feature = "rusqlite")]
         "sqlite" => DbConfig::Sqlite {
             path: args.db_path.unwrap_or_else(|| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
@@ -52,9 +51,7 @@ async fn main() -> anyhow::Result<()> {
             }),
         },
         other => anyhow::bail!(
-            "Unsupported db_type '{}'. Supported: redis{}",
-            other,
-            if cfg!(feature = "rusqlite") { ", sqlite" } else { "" }
+            "Unsupported db_type '{}'. Supported: redis, sqlite", other,
         ),
     };
 

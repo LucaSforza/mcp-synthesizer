@@ -6,7 +6,6 @@ use std::error::Error as StdError;
 use chrono::Utc;
 use redis::Commands;
 
-#[cfg(feature = "rusqlite")]
 use rusqlite::{params, Connection as SqliteConnection};
 
 #[derive(Debug, Clone)]
@@ -64,7 +63,6 @@ const VALID_RESULT_TYPES: &[&str] = &[
 #[derive(Debug)]
 pub enum DbError {
     Redis(redis::RedisError),
-    #[cfg(feature = "rusqlite")]
     Sqlite(rusqlite::Error),
     InvalidResultType(String),
 }
@@ -73,7 +71,6 @@ impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DbError::Redis(e) => write!(f, "Redis error: {}", e),
-            #[cfg(feature = "rusqlite")]
             DbError::Sqlite(e) => write!(f, "SQLite error: {}", e),
             DbError::InvalidResultType(s) => write!(f, "Invalid result type: {}", s),
         }
@@ -84,7 +81,6 @@ impl StdError for DbError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             DbError::Redis(e) => Some(e),
-            #[cfg(feature = "rusqlite")]
             DbError::Sqlite(e) => Some(e),
             DbError::InvalidResultType(_) => None,
         }
@@ -97,7 +93,6 @@ impl From<redis::RedisError> for DbError {
     }
 }
 
-#[cfg(feature = "rusqlite")]
 impl From<rusqlite::Error> for DbError {
     fn from(e: rusqlite::Error) -> Self {
         DbError::Sqlite(e)
@@ -162,7 +157,6 @@ pub trait Database: Send {
 #[derive(Clone, Debug)]
 pub enum DbConfig {
     Redis { url: String },
-    #[cfg(feature = "rusqlite")]
     Sqlite { path: String },
 }
 
@@ -173,7 +167,6 @@ impl DbConfig {
                 let db = RedisDatabase::new(url)?;
                 Ok(Box::new(db))
             }
-            #[cfg(feature = "rusqlite")]
             DbConfig::Sqlite { path } => {
                 let db = SqliteDatabase::new(path)?;
                 Ok(Box::new(db))
@@ -530,12 +523,10 @@ impl Database for RedisDatabase {
 // SQLite implementation
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "rusqlite")]
 pub struct SqliteDatabase {
     conn: SqliteConnection,
 }
 
-#[cfg(feature = "rusqlite")]
 impl SqliteDatabase {
     pub fn new(path: &str) -> Result<Self, DbError> {
         eprintln!("[DEBUG] SqliteDatabase::new path=\"{}\"", path);
@@ -632,7 +623,6 @@ impl SqliteDatabase {
     }
 }
 
-#[cfg(feature = "rusqlite")]
 impl Database for SqliteDatabase {
     fn get_or_create_project(
         &self,
@@ -1164,7 +1154,7 @@ mod redis_tests {
 // Tests — SQLite
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, feature = "rusqlite"))]
+#[cfg(test)]
 mod sqlite_tests {
     use super::*;
 
