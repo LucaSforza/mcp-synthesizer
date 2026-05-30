@@ -1,8 +1,8 @@
 use super::*;
-use crate::db::Database;
+use crate::db::{Database, RedisDatabase};
 
 struct TestCtx {
-    db: Database,
+    db: RedisDatabase,
     pipeline: SynthesisPipeline,
 }
 
@@ -14,12 +14,12 @@ fn setup(project_invariants: i32) -> TestCtx {
     let url = redis_url();
 
     // Flush test DB only, never touch real data
-    let flush_db = Database::new(&url).expect("flush db");
+    let flush_db = RedisDatabase::new(&url).expect("flush db");
     let mut conn = flush_db.client.get_connection().expect("conn");
     let _: () = redis::cmd("FLUSHDB").query(&mut conn).expect("flushdb");
     drop(flush_db);
 
-    let db = Database::new(&url).expect("DB");
+    let db = RedisDatabase::new(&url).expect("DB");
     let proj = db
         .get_or_create_project("test", project_invariants)
         .unwrap();
@@ -27,7 +27,7 @@ fn setup(project_invariants: i32) -> TestCtx {
     let tr = db.create_test_run(proj.id).unwrap();
     let mut pipeline = SynthesisPipeline::new(
         "/tmp".into(),
-        Database::new(&url).expect("Pipeline DB"),
+        Box::new(RedisDatabase::new(&url).expect("Pipeline DB")),
         proj.id,
         "test".into(),
         project_invariants,
@@ -221,12 +221,12 @@ fn test_iteration_resume_from_db() {
     let url = redis_url();
 
     // Flush test DB only, never touch real data
-    let flush_db = Database::new(&url).expect("flush db");
+    let flush_db = RedisDatabase::new(&url).expect("flush db");
     let mut conn = flush_db.client.get_connection().expect("conn");
     let _: () = redis::cmd("FLUSHDB").query(&mut conn).expect("flushdb");
     drop(flush_db);
 
-    let db = Database::new(&url).expect("DB");
+    let db = RedisDatabase::new(&url).expect("DB");
     let proj = db.get_or_create_project("resume-test", 3).unwrap();
 
     // Seed 2 trials across 2 test runs
@@ -248,7 +248,7 @@ fn test_iteration_resume_from_db() {
     // New pipeline should start iteration at max (3)
     let mut pipeline = SynthesisPipeline::new(
         "/tmp".into(),
-        Database::new(&url).expect("Pipeline DB 2"),
+        Box::new(RedisDatabase::new(&url).expect("Pipeline DB 2")),
         proj.id,
         "resume-test".into(),
         3,

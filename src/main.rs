@@ -5,7 +5,7 @@ mod tools;
 use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};
 
-use db::Database;
+use db::DbConfig;
 use tools::SynthesisTools;
 
 #[derive(Parser, Debug)]
@@ -15,9 +15,17 @@ struct Args {
     #[arg(short, long)]
     cwd: String,
 
-    /// Redis server URL (default: redis://localhost:6379)
+    /// Database backend type: "redis" (default) or "sqlite"
+    #[arg(long, default_value = "redis")]
+    db_type: String,
+
+    /// Redis server URL (used when --db-type=redis, default: redis://localhost:6379)
     #[arg(short = 'u', long)]
     redis_url: Option<String>,
+
+    /// SQLite database file path (used when --db-type=sqlite)
+    #[arg(short = 'l', long)]
+    db_path: Option<String>,
 
     /// Project name identifier
     #[arg(short, long)]
@@ -32,15 +40,31 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let redis_url = args.redis_url.unwrap_or_else(|| "redis://localhost:6379".into());
+    let db_config = match args.db_type.as_str() {
+        "redis" => DbConfig::Redis {
+            url: args.redis_url.unwrap_or_else(|| "redis://localhost:6379".into()),
+        },
+        #[cfg(feature = "rusqlite")]
+        "sqlite" => DbConfig::Sqlite {
+            path: args.db_path.unwrap_or_else(|| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                format!("{}/Documents/solidity-synthesis.db", home)
+            }),
+        },
+        other => anyhow::bail!(
+            "Unsupported db_type '{}'. Supported: redis{}",
+            other,
+            if cfg!(feature = "rusqlite") { ", sqlite" } else { "" }
+        ),
+    };
 
     eprintln!(
-        "[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} redis_url=\"{}\"",
-        args.cwd, args.project, args.invariants, redis_url
+        "[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} db_config={:?}",
+        args.cwd, args.project, args.invariants, db_config
     );
 
-    let db = Database::new(&redis_url)?;
-    eprintln!("[DEBUG] main::database_created url=\"{}\"", redis_url);
+    let db = db_config.connect()?;
+    eprintln!("[DEBUG] main::database_created");
 
     let project = db.get_or_create_project(&args.project, args.invariants)?;
     eprintln!(
@@ -50,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
     let tools = SynthesisTools::new(
         args.cwd,
-        redis_url,
+        db_config,
         db,
         args.project,
         args.invariants,
@@ -58,8 +82,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     eprintln!(
-        "[DEBUG] main::tools_created cwd=\"{}\" redis_url=\"{}\" project=\"{}\" invariants={} project_id={}",
-        tools.cwd, tools.redis_url, tools.project_name, tools.number_invariants, tools.project_id
+        "[DEBUG] main::tools_created project=\"{}\" invariants={} project_id={}",
+        tools.project_name, tools.number_invariants, tools.project_id
     );
 
     let service = tools.serve(stdio()).await?;

@@ -8,6 +8,9 @@ use serde::Deserialize;
 
 use crate::db::{Database, Metrics};
 
+#[allow(unused_imports)]
+use crate::db::DbError;
+
 #[derive(Debug)]
 pub struct VerificationReport {
     pub stage: String,
@@ -19,7 +22,7 @@ pub struct VerificationReport {
 
 pub struct SynthesisPipeline {
     pub cwd: String,
-    pub db: Database,
+    pub db: Box<dyn Database>,
     pub project_id: i64,
     pub _project_name: String, // unused but kept for context in reports
     pub project_number_invariants: i32,
@@ -33,7 +36,7 @@ pub struct SynthesisPipeline {
 impl SynthesisPipeline {
     pub fn new(
         cwd: String,
-        db: Database,
+        db: Box<dyn Database>,
         project_id: i64,
         project_name: String,
         project_number_invariants: i32,

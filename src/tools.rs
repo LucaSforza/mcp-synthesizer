@@ -3,13 +3,13 @@ use std::sync::Mutex;
 
 use rmcp::{tool, tool_router};
 
-use crate::db::Database;
+use crate::db::{Database, DbConfig};
 use crate::pipeline::{extract_forge_gas_json, SynthesisPipeline};
 
 pub struct SynthesisTools {
     pub cwd: String,
-    pub redis_url: String,
-    pub db: Mutex<Database>,
+    pub db_config: DbConfig,
+    pub db: Mutex<Box<dyn Database>>,
     pub project_name: String,
     pub number_invariants: i32,
     pub project_id: i64,
@@ -20,15 +20,15 @@ pub struct SynthesisTools {
 impl SynthesisTools {
     pub fn new(
         cwd: String,
-        redis_url: String,
-        db: Database,
+        db_config: DbConfig,
+        db: Box<dyn Database>,
         project_name: String,
         number_invariants: i32,
         project_id: i64,
     ) -> Self {
         eprintln!(
-            "[DEBUG] tools::new cwd=\"{}\" redis_url=\"{}\" project=\"{}\" invariants={} project_id={}",
-            cwd, redis_url, project_name, number_invariants, project_id
+            "[DEBUG] tools::new cwd=\"{}\" project=\"{}\" invariants={} project_id={}",
+            cwd, project_name, number_invariants, project_id
         );
         let test_run = db
             .create_test_run(project_id)
@@ -36,7 +36,7 @@ impl SynthesisTools {
         eprintln!("[DEBUG] tools::new test_run_id={}", test_run.id);
         Self {
             cwd,
-            redis_url,
+            db_config,
             db: Mutex::new(db),
             project_name,
             number_invariants,
@@ -233,7 +233,7 @@ impl SynthesisTools {
             *pipe_lock = Some(
                 SynthesisPipeline::new(
                     self.cwd.clone(),
-                    Database::new(&self.redis_url)
+                    self.db_config.connect()
                         .map_err(|e| format!("Failed to open DB: {}", e))?,
                     self.project_id,
                     self.project_name.clone(),
