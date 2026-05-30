@@ -1,19 +1,25 @@
 use super::*;
 use crate::db::Database;
-use tempfile::TempDir;
 
 struct TestCtx {
     db: Database,
     pipeline: SynthesisPipeline,
-    _dir: TempDir,
+}
+
+fn redis_url() -> String {
+    std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into())
 }
 
 fn setup(project_invariants: i32) -> TestCtx {
-    let dir = TempDir::new().expect("temp dir");
-    let path = dir.path().join("test.db");
-    let path_str = path.to_str().unwrap().to_string();
+    let url = redis_url();
 
-    let db = Database::new(&path_str).expect("DB");
+    // Flush for isolation
+    let flush_db = Database::new(&url).expect("flush db");
+    let mut conn = flush_db.client.get_connection().expect("conn");
+    let _: () = redis::cmd("FLUSHALL").query(&mut conn).expect("flushall");
+    drop(flush_db);
+
+    let db = Database::new(&url).expect("DB");
     let proj = db
         .get_or_create_project("test", project_invariants)
         .unwrap();
@@ -21,7 +27,7 @@ fn setup(project_invariants: i32) -> TestCtx {
     let tr = db.create_test_run(proj.id).unwrap();
     let mut pipeline = SynthesisPipeline::new(
         "/tmp".into(),
-        Database::new(&path_str).expect("Pipeline DB"),
+        Database::new(&url).expect("Pipeline DB"),
         proj.id,
         "test".into(),
         project_invariants,
@@ -30,11 +36,7 @@ fn setup(project_invariants: i32) -> TestCtx {
     .expect("Failed to create pipeline");
     pipeline.mock_commands = Some(Vec::new());
 
-    TestCtx {
-        db,
-        pipeline,
-        _dir: dir,
-    }
+    TestCtx { db, pipeline }
 }
 
 fn push_ok(pipeline: &mut SynthesisPipeline, output: &str) {
@@ -63,8 +65,6 @@ fn test_pipeline_uses_test_run() {
 #[test]
 fn test_build_passed() {
     let mut ctx = setup(3);
-    // Build passes → run() should short-circuit at build stage with no further stages needed
-    // But run() has 3 stages: build, test, halmos. Need mocks for all if build passes.
     push_ok(&mut ctx.pipeline, "build ok");
     push_ok(&mut ctx.pipeline, "test ok");
     push_ok(&mut ctx.pipeline, "halmos ok");
@@ -107,7 +107,6 @@ fn test_test_failed() {
 fn test_halmos_succeeded_full() {
     let mut ctx = setup(3);
     push_ok(&mut ctx.pipeline, "build ok");
-    // Forge test mock as forge test --json output
     push_ok(
         &mut ctx.pipeline,
         r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":50000}}}}}}"#,
@@ -219,11 +218,15 @@ fn test_extract_not_proved() {
 
 #[test]
 fn test_iteration_resume_from_db() {
-    let dir = TempDir::new().expect("temp dir");
-    let path = dir.path().join("test.db");
-    let path_str = path.to_str().unwrap().to_string();
+    let url = redis_url();
 
-    let db = Database::new(&path_str).expect("DB");
+    // Flush for isolation
+    let flush_db = Database::new(&url).expect("flush db");
+    let mut conn = flush_db.client.get_connection().expect("conn");
+    let _: () = redis::cmd("FLUSHALL").query(&mut conn).expect("flushall");
+    drop(flush_db);
+
+    let db = Database::new(&url).expect("DB");
     let proj = db.get_or_create_project("resume-test", 3).unwrap();
 
     // Seed 2 trials across 2 test runs
@@ -245,7 +248,7 @@ fn test_iteration_resume_from_db() {
     // New pipeline should start iteration at max (3)
     let mut pipeline = SynthesisPipeline::new(
         "/tmp".into(),
-        Database::new(&path_str).expect("Pipeline DB 2"),
+        Database::new(&url).expect("Pipeline DB 2"),
         proj.id,
         "resume-test".into(),
         3,

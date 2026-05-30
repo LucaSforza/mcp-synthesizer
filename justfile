@@ -39,3 +39,16 @@ install: build
     fi
 
     echo "INSTALL COMPLETE!"
+
+# Start Redis via docker compose
+redis-up:
+    docker compose up -d
+
+# Stop Redis
+redis-down:
+    docker compose down
+
+# Run full tests with Redis (single-threaded to avoid FLUSHALL interference)
+test: redis-up
+    cargo test -- --test-threads 1
+    docker compose down

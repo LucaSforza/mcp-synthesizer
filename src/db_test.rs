@@ -1,7 +1,12 @@
 use super::*;
 
 fn setup_db() -> Database {
-    Database::new(":memory:").expect("Failed to create in-memory DB")
+    let url = std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
+    let db = Database::new(&url).expect("Failed to connect to Redis");
+    // Flush all data for test isolation
+    let mut conn = db.client.get_connection().expect("conn");
+    let _: () = redis::cmd("FLUSHALL").query(&mut conn).expect("flushall");
+    db
 }
 
 #[test]

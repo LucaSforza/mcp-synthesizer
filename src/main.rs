@@ -15,9 +15,9 @@ struct Args {
     #[arg(short, long)]
     cwd: String,
 
-    /// Path to the SQLite database (default: $HOME/Documents/solidity-synthesis.db)
-    #[arg(short, long)]
-    db_path: Option<String>,
+    /// Redis server URL (default: redis://localhost:6379)
+    #[arg(short = 'u', long)]
+    redis_url: Option<String>,
 
     /// Project name identifier
     #[arg(short, long)]
@@ -32,18 +32,15 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let db_path = args.db_path.unwrap_or_else(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        format!("{}/Documents/solidity-synthesis.db", home)
-    });
+    let redis_url = args.redis_url.unwrap_or_else(|| "redis://localhost:6379".into());
 
     eprintln!(
-        "[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} db_path=\"{}\"",
-        args.cwd, args.project, args.invariants, db_path
+        "[DEBUG] main::start cwd=\"{}\" project=\"{}\" invariants={} redis_url=\"{}\"",
+        args.cwd, args.project, args.invariants, redis_url
     );
 
-    let db = Database::new(&db_path)?;
-    eprintln!("[DEBUG] main::database_created path=\"{}\"", db_path);
+    let db = Database::new(&redis_url)?;
+    eprintln!("[DEBUG] main::database_created url=\"{}\"", redis_url);
 
     let project = db.get_or_create_project(&args.project, args.invariants)?;
     eprintln!(
@@ -53,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     let tools = SynthesisTools::new(
         args.cwd,
-        db_path,
+        redis_url,
         db,
         args.project,
         args.invariants,
@@ -61,8 +58,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     eprintln!(
-        "[DEBUG] main::tools_created cwd=\"{}\" db_path=\"{}\" project=\"{}\" invariants={} project_id={}",
-        tools.cwd, tools.db_path, tools.project_name, tools.number_invariants, tools.project_id
+        "[DEBUG] main::tools_created cwd=\"{}\" redis_url=\"{}\" project=\"{}\" invariants={} project_id={}",
+        tools.cwd, tools.redis_url, tools.project_name, tools.number_invariants, tools.project_id
     );
 
     let service = tools.serve(stdio()).await?;

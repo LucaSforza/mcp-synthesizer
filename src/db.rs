@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
-use rusqlite::{params, Connection, Result as SqlResult};
+use chrono::Utc;
+use redis::{Client, Commands, RedisResult};
 
 pub struct Database {
-    conn: Connection,
+    pub client: Client,
 }
 
 #[derive(Debug, Clone)]
@@ -45,131 +46,61 @@ pub struct Metrics {
     pub succeeded_iterations: i32,
 }
 
+const VALID_RESULT_TYPES: &[&str] = &[
+    "failed_compilation",
+    "failed_fuzzing",
+    "succeeded_fuzzing",
+    "failed_halmos",
+    "succeeded_partial",
+    "succeeded_full",
+];
+
 impl Database {
-    pub fn new(path: &str) -> SqlResult<Self> {
-        eprintln!("[DEBUG] db::new path=\"{}\"", path);
-        let conn = Connection::open(path)?;
-        let db = Self { conn };
-        db.run_migrations()?;
-        eprintln!("[DEBUG] db::new::ok path=\"{}\"", path);
-        Ok(db)
+    pub fn new(redis_url: &str) -> RedisResult<Self> {
+        eprintln!("[DEBUG] db::new redis_url=\"{}\"", redis_url);
+        let client = Client::open(redis_url)?;
+        eprintln!("[DEBUG] db::new::ok");
+        Ok(Self { client })
     }
 
-    fn run_migrations(&self) -> SqlResult<()> {
-        eprintln!("[DEBUG] db::run_migrations");
-        self.conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS project (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                number_invariants INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS test_run (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL REFERENCES project(id),
-                compilation_passed INTEGER NOT NULL DEFAULT 0,
-                compilation_not_passed INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS synthesis_trial (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_run_id INTEGER NOT NULL REFERENCES test_run(id),
-                iteration INTEGER NOT NULL,
-                gas_of_implementation INTEGER,
-                result_type TEXT NOT NULL CHECK(result_type IN ('failed_compilation', 'failed_fuzzing', 'succeeded_fuzzing', 'failed_halmos', 'succeeded_partial', 'succeeded_full')),
-                not_proved_invariants INTEGER DEFAULT 0,
-                failure_detail TEXT,
-                is_full_synthesis INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            ",
-        )?;
-
-        // Migration for existing DBs: add is_full_synthesis column if missing
-        if self
-            .conn
-            .prepare("SELECT is_full_synthesis FROM synthesis_trial LIMIT 0")
-            .is_err()
-        {
-            self.conn.execute_batch(
-                "ALTER TABLE synthesis_trial ADD COLUMN is_full_synthesis INTEGER NOT NULL DEFAULT 0;"
-            )?;
-            eprintln!("[DEBUG] db::run_migrations add_column=is_full_synthesis");
-        }
-
-        // Migration for existing DBs: expand CHECK constraint to include 'succeeded_fuzzing'
-        // Probe by attempting a temp insert; if CHECK rejects it, recreate the table
-        let check_ok = self.conn.execute(
-            "INSERT INTO synthesis_trial (test_run_id, iteration, result_type, is_full_synthesis) VALUES (-999, 0, 'succeeded_fuzzing', 0)",
-            [],
-        );
-        if check_ok.is_err() {
-            eprintln!("[DEBUG] db::run_migrations recreate_table=old_check_constraint_detected");
-            self.conn.execute_batch(
-                "ALTER TABLE synthesis_trial RENAME TO synthesis_trial_old;
-
-                CREATE TABLE synthesis_trial (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    test_run_id INTEGER NOT NULL REFERENCES test_run(id),
-                    iteration INTEGER NOT NULL,
-                    gas_of_implementation INTEGER,
-                    result_type TEXT NOT NULL CHECK(result_type IN ('failed_compilation', 'failed_fuzzing', 'succeeded_fuzzing', 'failed_halmos', 'succeeded_partial', 'succeeded_full')),
-                    not_proved_invariants INTEGER DEFAULT 0,
-                    failure_detail TEXT,
-                    is_full_synthesis INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-
-                INSERT INTO synthesis_trial
-                    SELECT id, test_run_id, iteration, gas_of_implementation,
-                           result_type, not_proved_invariants, failure_detail,
-                           is_full_synthesis, created_at
-                    FROM synthesis_trial_old;
-
-                DROP TABLE synthesis_trial_old;"
-            )?;
-            eprintln!("[DEBUG] db::run_migrations::check_constraint_expanded");
-        } else {
-            // Clean up the probe row
-            self.conn
-                .execute("DELETE FROM synthesis_trial WHERE test_run_id = -999", [])?;
-        }
-
-        eprintln!("[DEBUG] db::run_migrations::ok tables=[project,test_run,synthesis_trial]");
-        Ok(())
-    }
-
-    pub fn get_or_create_project(&self, name: &str, number_invariants: i32) -> SqlResult<Project> {
+    pub fn get_or_create_project(
+        &self,
+        name: &str,
+        number_invariants: i32,
+    ) -> RedisResult<Project> {
         eprintln!(
             "[DEBUG] db::get_or_create_project name=\"{}\" number_invariants={}",
             name, number_invariants
         );
-        let existing = self.conn.query_row(
-            "SELECT id, name, number_invariants FROM project WHERE name = ?1",
-            params![name],
-            |row| {
-                Ok(Project {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    number_invariants: row.get(2)?,
-                })
-            },
-        );
+        let mut conn = self.client.get_connection()?;
+        let name_key = format!("project:name:{}", name);
+        let existing_id: Option<i64> = conn.get(&name_key)?;
 
-        match existing {
-            Ok(project) => {
-                eprintln!("[DEBUG] db::get_or_create_project::found id={}", project.id);
-                Ok(project)
+        match existing_id {
+            Some(id) => {
+                let project_key = format!("project:{}", id);
+                let stored_name: String = conn.hget(&project_key, "name")?;
+                let inv_str: String = conn.hget(&project_key, "number_invariants")?;
+                let inv = inv_str.parse::<i32>().unwrap_or(0);
+                eprintln!("[DEBUG] db::get_or_create_project::found id={}", id);
+                Ok(Project {
+                    id,
+                    name: stored_name,
+                    number_invariants: inv,
+                })
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                self.conn.execute(
-                    "INSERT INTO project (name, number_invariants) VALUES (?1, ?2)",
-                    params![name, number_invariants],
+            None => {
+                let id: i64 = conn.incr("project:ids", 1)?;
+                let project_key = format!("project:{}", id);
+                let now = Utc::now().to_rfc3339();
+                let _: bool = conn.hset(&project_key, "name", name)?;
+                let _: bool = conn.hset(
+                    &project_key,
+                    "number_invariants",
+                    &number_invariants.to_string(),
                 )?;
-                let id = self.conn.last_insert_rowid();
+                let _: bool = conn.hset(&project_key, "created_at", &now)?;
+                let _: () = conn.set(&name_key, id)?;
                 eprintln!("[DEBUG] db::get_or_create_project::created id={}", id);
                 Ok(Project {
                     id,
@@ -177,20 +108,20 @@ impl Database {
                     number_invariants,
                 })
             }
-            Err(e) => {
-                eprintln!("[DEBUG] db::get_or_create_project::err error=\"{}\"", e);
-                Err(e)
-            }
         }
     }
 
-    pub fn create_test_run(&self, project_id: i64) -> SqlResult<TestRun> {
+    pub fn create_test_run(&self, project_id: i64) -> RedisResult<TestRun> {
         eprintln!("[DEBUG] db::create_test_run project_id={}", project_id);
-        self.conn.execute(
-            "INSERT INTO test_run (project_id) VALUES (?1)",
-            params![project_id],
-        )?;
-        let id = self.conn.last_insert_rowid();
+        let mut conn = self.client.get_connection()?;
+        let id: i64 = conn.incr("test_run:ids", 1)?;
+        let key = format!("test_run:{}", id);
+        let now = Utc::now().to_rfc3339();
+        let _: bool = conn.hset(&key, "project_id", &project_id.to_string())?;
+        let _: bool = conn.hset(&key, "compilation_passed", "0")?;
+        let _: bool = conn.hset(&key, "compilation_not_passed", "0")?;
+        let _: bool = conn.hset(&key, "created_at", &now)?;
+        let _: i64 = conn.sadd(format!("test_run:by_project:{}", project_id), id)?;
         eprintln!("[DEBUG] db::create_test_run::ok id={}", id);
         Ok(TestRun {
             id,
@@ -201,7 +132,7 @@ impl Database {
     }
 
     /// Record a trial, enforcing:
-    /// - Only the last trial in a test_run can be succeeded_*; prior trials must be failed_*
+    /// - result_type must be one of the valid types
     /// - In succeeded trial: not_proved_invariants <= project number_invariants
     pub fn record_trial(
         &self,
@@ -213,7 +144,7 @@ impl Database {
         failure_detail: Option<&str>,
         project_number_invariants: i32,
         is_full_synthesis: bool,
-    ) -> SqlResult<SynthesisTrial> {
+    ) -> RedisResult<SynthesisTrial> {
         eprintln!(
             "[DEBUG] db::record_trial test_run_id={} iteration={} gas={:?} result_type=\"{}\" not_proved={} project_invariants={} is_full_synthesis={}",
             test_run_id,
@@ -225,31 +156,18 @@ impl Database {
             is_full_synthesis
         );
 
-        // Check succeeded constraint: only the last trial can be succeeded
-        if result_type.starts_with("succeeded") {
-            let has_later_trial: bool = self.conn.query_row(
-                "SELECT COUNT(*) > 0 FROM synthesis_trial WHERE test_run_id = ?1 AND iteration > ?2",
-                params![test_run_id, iteration],
-                |row| row.get(0),
-            )?;
-            eprintln!(
-                "[DEBUG] db::record_trial::check_succeeded has_later_trial={}",
-                has_later_trial
-            );
-            if !has_later_trial {
-                // Check that prior trials are all failed
-                let _prior_non_failed: i32 = self.conn.query_row(
-                    "SELECT COUNT(*) FROM synthesis_trial WHERE test_run_id = ?1 AND iteration < ?2 AND result_type LIKE 'succeeded%'",
-                    params![test_run_id, iteration],
-                    |row| row.get(0),
-                )?;
-                // We allow it — the check just ensures no earlier succeeded exists (we check below)
-                // Actually the constraint is: "Only the last trial in a testRun can be Succeeded"
-                // So if we're the last, and no later trial exists, that's fine.
-                // All preceding trials must be Failed.
-            }
+        if !VALID_RESULT_TYPES.contains(&result_type) {
+            return Err(redis::RedisError::from((
+                redis::ErrorKind::TypeError,
+                "Invalid result type",
+                format!(
+                    "result_type must be one of: {:?}, got: {}",
+                    VALID_RESULT_TYPES, result_type
+                ),
+            )));
+        }
 
-            // Invariants constraint
+        if result_type.starts_with("succeeded") {
             assert!(
                 not_proved_invariants <= project_number_invariants,
                 "not_proved_invariants ({}) must be <= number_of_invariants ({})",
@@ -258,11 +176,56 @@ impl Database {
             );
         }
 
-        self.conn.execute(
-            "INSERT INTO synthesis_trial (test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis as i32],
+        let mut conn = self.client.get_connection()?;
+        let id: i64 = conn.incr("synthesis_trial:ids", 1)?;
+        let trial_key = format!("synthesis_trial:{}", id);
+        let now = Utc::now().to_rfc3339();
+
+        let _: bool = conn.hset(&trial_key, "test_run_id", &test_run_id.to_string())?;
+        let _: bool = conn.hset(&trial_key, "iteration", &iteration.to_string())?;
+        let _: bool = conn.hset(&trial_key, "result_type", result_type)?;
+        let _: bool = conn.hset(
+            &trial_key,
+            "not_proved_invariants",
+            &not_proved_invariants.to_string(),
         )?;
-        let id = self.conn.last_insert_rowid();
+        let _: bool = conn.hset(
+            &trial_key,
+            "is_full_synthesis",
+            &(is_full_synthesis as i32).to_string(),
+        )?;
+        let _: bool = conn.hset(&trial_key, "created_at", &now)?;
+        if let Some(gas) = gas_of_implementation {
+            let _: bool = conn.hset(&trial_key, "gas_of_implementation", &gas.to_string())?;
+        }
+        if let Some(detail) = failure_detail {
+            let _: bool = conn.hset(&trial_key, "failure_detail", detail)?;
+        }
+
+        // Index by test_run (sorted by iteration)
+        let _: i64 = conn.zadd(
+            format!("synthesis_trial:by_test_run:{}", test_run_id),
+            id,
+            iteration as f64,
+        )?;
+
+        // Look up project_id for project-level indices
+        let tr_key = format!("test_run:{}", test_run_id);
+        let pid_str: String = conn.hget(&tr_key, "project_id")?;
+        let project_id: i64 = pid_str.parse().unwrap_or(0);
+
+        let _: i64 = conn.sadd(
+            format!("synthesis_trial:by_project:{}", project_id),
+            id,
+        )?;
+        if let Some(gas) = gas_of_implementation {
+            let _: i64 = conn.zadd(
+                format!("synthesis_trial:gas:by_project:{}", project_id),
+                id,
+                gas as f64,
+            )?;
+        }
+
         eprintln!("[DEBUG] db::record_trial::ok trial_id={}", id);
         Ok(SynthesisTrial {
             id,
@@ -276,14 +239,15 @@ impl Database {
         })
     }
 
-    pub fn get_max_iteration(&self, test_run_id: i64) -> SqlResult<i32> {
-        let max: i32 = self.conn.query_row(
-            "SELECT COALESCE(MAX(st.iteration), 0)
-             FROM synthesis_trial st
-             WHERE st.test_run_id = ?1",
-            params![test_run_id],
-            |row| row.get(0),
-        )?;
+    pub fn get_max_iteration(&self, test_run_id: i64) -> RedisResult<i32> {
+        let mut conn = self.client.get_connection()?;
+        let key = format!("synthesis_trial:by_test_run:{}", test_run_id);
+        let entries: Vec<(String, f64)> = conn.zrevrange_withscores(&key, 0, 0)?;
+        let max = if entries.is_empty() {
+            0
+        } else {
+            entries[0].1 as i32
+        };
         eprintln!(
             "[DEBUG] db::get_max_iteration test_run_id={} max={}",
             test_run_id, max
@@ -291,142 +255,144 @@ impl Database {
         Ok(max)
     }
 
-    pub fn increment_compilation_passed(&self, test_run_id: i64) -> SqlResult<()> {
+    pub fn increment_compilation_passed(&self, test_run_id: i64) -> RedisResult<()> {
         eprintln!(
             "[DEBUG] db::increment_compilation_passed test_run_id={}",
             test_run_id
         );
-        self.conn.execute(
-            "UPDATE test_run SET compilation_passed = compilation_passed + 1 WHERE id = ?1",
-            params![test_run_id],
-        )?;
+        let mut conn = self.client.get_connection()?;
+        let _: i64 =
+            conn.hincr(format!("test_run:{}", test_run_id), "compilation_passed", 1)?;
         Ok(())
     }
 
-    pub fn increment_compilation_not_passed(&self, test_run_id: i64) -> SqlResult<()> {
+    pub fn increment_compilation_not_passed(&self, test_run_id: i64) -> RedisResult<()> {
         eprintln!(
             "[DEBUG] db::increment_compilation_not_passed test_run_id={}",
             test_run_id
         );
-        self.conn.execute(
-            "UPDATE test_run SET compilation_not_passed = compilation_not_passed + 1 WHERE id = ?1",
-            params![test_run_id],
+        let mut conn = self.client.get_connection()?;
+        let _: i64 = conn.hincr(
+            format!("test_run:{}", test_run_id),
+            "compilation_not_passed",
+            1,
         )?;
         Ok(())
     }
 
-    pub fn get_project(&self, project_id: i64) -> SqlResult<Project> {
+    pub fn get_project(&self, project_id: i64) -> RedisResult<Project> {
         eprintln!("[DEBUG] db::get_project project_id={}", project_id);
-        let result = self.conn.query_row(
-            "SELECT id, name, number_invariants FROM project WHERE id = ?1",
-            params![project_id],
-            |row| {
-                Ok(Project {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    number_invariants: row.get(2)?,
-                })
-            },
+        let mut conn = self.client.get_connection()?;
+        let key = format!("project:{}", project_id);
+        let name: String = conn.hget(&key, "name")?;
+        let inv_str: String = conn.hget(&key, "number_invariants")?;
+        let number_invariants = inv_str.parse::<i32>().unwrap_or(0);
+        eprintln!(
+            "[DEBUG] db::get_project::ok id={} name=\"{}\" invariants={}",
+            project_id, name, number_invariants
         );
-        match &result {
-            Ok(p) => eprintln!(
-                "[DEBUG] db::get_project::ok id={} name=\"{}\" invariants={}",
-                p.id, p.name, p.number_invariants
-            ),
-            Err(e) => eprintln!("[DEBUG] db::get_project::err error=\"{}\"", e),
-        }
-        result
+        Ok(Project {
+            id: project_id,
+            name,
+            number_invariants,
+        })
     }
 
-    pub fn get_metrics(&self, project_id: i64) -> SqlResult<Metrics> {
+    pub fn get_metrics(&self, project_id: i64) -> RedisResult<Metrics> {
         eprintln!("[DEBUG] db::get_metrics project_id={}", project_id);
-        let _project = self.get_project(project_id)?;
+        let mut conn = self.client.get_connection()?;
 
-        // Aggregate gas metrics across all trials for this project's test runs
-        let peak_gas: Option<i64> = self.conn.query_row(
-            "SELECT MAX(gas_of_implementation)
-             FROM synthesis_trial st
-             JOIN test_run tr ON st.test_run_id = tr.id
-             WHERE tr.project_id = ?1 AND gas_of_implementation IS NOT NULL",
-            params![project_id],
-            |row| row.get(0),
-        )?;
+        // Gas metrics from gas sorted set
+        let gas_key = format!("synthesis_trial:gas:by_project:{}", project_id);
+        let gas_entries: Vec<(String, f64)> = conn.zrange_withscores(&gas_key, 0, -1)?;
+        let gas_values: Vec<i64> = gas_entries.iter().map(|(_, s)| *s as i64).collect();
 
-        // Median gas: fetch all non-null values, compute in Rust
-        let median_gas = {
-            let mut stmt = self.conn.prepare(
-                "SELECT gas_of_implementation
-                 FROM synthesis_trial st
-                 JOIN test_run tr ON st.test_run_id = tr.id
-                 WHERE tr.project_id = ?1 AND gas_of_implementation IS NOT NULL
-                 ORDER BY gas_of_implementation",
-            )?;
-            let rows = stmt.query_map(params![project_id], |row| row.get::<_, i64>(0))?;
-            let vals: Vec<i64> = rows.filter_map(|r| r.ok()).collect();
-            if vals.is_empty() {
-                None
+        let peak_gas = gas_values.last().copied();
+        let median_gas = if gas_values.is_empty() {
+            None
+        } else {
+            let mid = gas_values.len() / 2;
+            if gas_values.len() % 2 == 1 {
+                Some(gas_values[mid] as f64)
             } else {
-                let mid = vals.len() / 2;
-                if vals.len() % 2 == 1 {
-                    Some(vals[mid] as f64)
-                } else {
-                    Some((vals[mid - 1] + vals[mid]) as f64 / 2.0)
-                }
+                Some((gas_values[mid - 1] + gas_values[mid]) as f64 / 2.0)
             }
         };
 
-        // Compilation stats
-        let comp_stats = self.conn.query_row(
-            "SELECT COALESCE(SUM(compilation_passed), 0), COALESCE(SUM(compilation_not_passed), 0)
-             FROM test_run WHERE project_id = ?1",
-            params![project_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        // Compilation stats from test runs
+        let tr_ids: Vec<String> =
+            conn.smembers(format!("test_run:by_project:{}", project_id))?;
+        let mut comp_passed: i32 = 0;
+        let mut comp_not_passed: i32 = 0;
+        for tid_str in &tr_ids {
+            let tr_key = format!("test_run:{}", tid_str);
+            let p: String = conn
+                .hget(&tr_key, "compilation_passed")
+                .unwrap_or_default();
+            let np: String = conn
+                .hget(&tr_key, "compilation_not_passed")
+                .unwrap_or_default();
+            comp_passed += p.parse::<i32>().unwrap_or(0);
+            comp_not_passed += np.parse::<i32>().unwrap_or(0);
+        }
 
-        // Total trials
-        let total_trials: i32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM synthesis_trial st JOIN test_run tr ON st.test_run_id = tr.id WHERE tr.project_id = ?1",
-            params![project_id],
-            |row| row.get(0),
-        )?;
+        // Trial-level aggregation
+        let trial_ids: Vec<String> =
+            conn.smembers(format!("synthesis_trial:by_project:{}", project_id))?;
+        let total_trials = trial_ids.len() as i32;
 
-        // Invariant stats — count succeeded_full vs succeeded_partial vs unproven
-        let proven: i32 = self.conn.query_row(
-            "SELECT COALESCE(SUM(p.number_invariants - st.not_proved_invariants), 0)
-             FROM synthesis_trial st
-             JOIN test_run tr ON st.test_run_id = tr.id
-             JOIN project p ON tr.project_id = p.id
-             WHERE tr.project_id = ?1 AND st.result_type = 'succeeded_full'",
-            params![project_id],
-            |row| row.get(0),
-        )?;
+        let mut proven: i32 = 0;
+        let mut unproven: i32 = 0;
+        let mut min_succeeded_iter: Option<i32> = None;
 
-        let unproven: i32 = self.conn.query_row(
-            "SELECT COALESCE(SUM(not_proved_invariants), 0)
-             FROM synthesis_trial st JOIN test_run tr ON st.test_run_id = tr.id
-             WHERE tr.project_id = ?1 AND st.result_type LIKE 'succeeded%'",
-            params![project_id],
-            |row| row.get(0),
-        )?;
+        // Read project_number_invariants for proven calculation
+        let project_key = format!("project:{}", project_id);
+        let inv_str: String = conn
+            .hget(&project_key, "number_invariants")
+            .unwrap_or_default();
+        let project_number_invariants = inv_str.parse::<i32>().unwrap_or(0);
 
-        // Synthesis efficiency — iterations needed to reach a succeeded state
-        let succeeded_iters: i32 = self.conn.query_row(
-            "SELECT COALESCE(MIN(iteration), 0)
-             FROM synthesis_trial st JOIN test_run tr ON st.test_run_id = tr.id
-             WHERE tr.project_id = ?1 AND st.result_type LIKE 'succeeded%'",
-            params![project_id],
-            |row| row.get(0),
-        )?;
+        for tid_str in &trial_ids {
+            let trial_key = format!("synthesis_trial:{}", tid_str);
+            let rtype: String = match conn.hget(&trial_key, "result_type") {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if rtype == "succeeded_full" {
+                let npi_str: String = conn
+                    .hget(&trial_key, "not_proved_invariants")
+                    .unwrap_or_default();
+                let npi = npi_str.parse::<i32>().unwrap_or(0);
+                proven += project_number_invariants - npi;
+            }
+
+            if rtype.starts_with("succeeded") {
+                let npi_str: String = conn
+                    .hget(&trial_key, "not_proved_invariants")
+                    .unwrap_or_default();
+                let npi = npi_str.parse::<i32>().unwrap_or(0);
+                unproven += npi;
+
+                let iter_str: String = conn
+                    .hget(&trial_key, "iteration")
+                    .unwrap_or_default();
+                let iter = iter_str.parse::<i32>().unwrap_or(0);
+                if min_succeeded_iter.is_none() || iter < min_succeeded_iter.unwrap() {
+                    min_succeeded_iter = Some(iter);
+                }
+            }
+        }
 
         let metrics = Metrics {
             median_gas,
             peak_gas,
-            compilation_passed: comp_stats.0,
-            compilation_not_passed: comp_stats.1,
+            compilation_passed: comp_passed,
+            compilation_not_passed: comp_not_passed,
             total_trials,
             proven_invariants: proven,
             unproven_invariants: unproven,
-            succeeded_iterations: succeeded_iters,
+            succeeded_iterations: min_succeeded_iter.unwrap_or(0),
         };
         eprintln!(
             "[DEBUG] db::get_metrics::ok project_id={} median_gas={:?} peak_gas={:?} comp_passed={} comp_not_passed={} total_trials={} proven={} unproven={} succeeded_at_iter={}",
