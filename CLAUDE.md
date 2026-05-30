@@ -21,6 +21,14 @@ This MCP server is the **authorized path** for forge operations and synthesis. W
 
 Tests use `FLUSHDB` on DB 1 per module — never touch DB 0 real data.
 
+### Persistence
+
+Redis saves data to `/data/dump.rdb` inside container. `docker-compose.yml` maps `redis-data` volume there — survives reboot. Container has `restart: unless-stopped`, starts automatically after reboot.
+
+```bash
+docker compose up -d   # start + auto-restart on boot
+```
+
 ## Build & Run
 
 ```bash
