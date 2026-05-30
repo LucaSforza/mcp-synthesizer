@@ -14,12 +14,12 @@ This MCP server is the **authorized path** for forge operations and synthesis. W
 
 ## Database Backends
 
-Two backends via `Database` trait. Default: Redis. Both behind `--db-type` flag.
+Two backends via `Database` trait. Selected at runtime via `--db-type` flag. Both compiled unconditionally.
 
-| Backend | CLI flag | Connection param | Feature gate |
-|---------|----------|------------------|--------------|
-| Redis (default) | `--db-type redis` | `--redis-url redis://localhost:6379` | unconditional |
-| SQLite | `--db-type sqlite` | `--db-path <path>` | `rusqlite` |
+| Backend | CLI flag | Connection param |
+|---------|----------|------------------|
+| Redis (default) | `--db-type redis` | `--redis-url redis://localhost:6379` |
+| SQLite | `--db-type sqlite` | `--db-path <path>` |
 
 ### Redis Databases
 
@@ -36,7 +36,7 @@ Default path: `$HOME/Documents/solidity-synthesis.db`. SQLite backend has schema
 
 ### Persistence
 
-Redis saves data to `/data/dump.rdb` inside container. `docker-compose.yml` maps `redis-data` volume there — survives reboot. Container has `restart: unless-stopped`, starts automatically after reboot.
+Redis saves data to `/data/dump.rdb` inside container. `docker-compose.yml` maps `redis-data` volume there. Container has `restart: unless-stopped`.
 
 ```bash
 docker compose up -d   # start + auto-restart on boot
@@ -45,12 +45,11 @@ docker compose up -d   # start + auto-restart on boot
 ## Build & Run
 
 ```bash
-cargo build                          # Redis only
-cargo build --features rusqlite      # Redis + SQLite
+cargo build                       # both backends always compiled
 cargo build --release
 cargo run -- --cwd /path/to/foundry-project --project my-contracts
 cargo run -- --cwd . --project test --invariants 5
-cargo run --features rusqlite -- --cwd . --project test --db-type sqlite
+cargo run -- --cwd . --project test --db-type sqlite
 ```
 
 **Flags:** `--cwd` (required), `--project` (required), `--invariants` (default 0),
@@ -63,7 +62,7 @@ cargo run --features rusqlite -- --cwd . --project test --db-type sqlite
 
 **Runtime deps:** Redis server (for Redis backend), `forge` and `halmos` on PATH. `halmos` requires python venv. Start Redis via `docker compose up -d` or `just redis-up`.
 
-**Musl target:** `Cargo.toml` configures `x86_64-unknown-linux-musl` with `rust-lld` + `crt-static` for fully static binary.
+**Musl target:** `Cargo.toml` configures `x86_64-unknown-linux-musl` for fully static binary.
 
 ## Build & Install (justfile)
 
@@ -82,7 +81,7 @@ just test      # redis-up + cargo test -- --test-threads 1 + redis-down
 docker compose up -d   # start Redis
 cargo run -- --cwd /path/to/foundry-project --project my-contracts
 cargo run -- --cwd . --project test --invariants 5 --redis-url redis://localhost:6379
-cargo run --features rusqlite -- --cwd . --project test --db-type sqlite
+cargo run -- --cwd . --project test --db-type sqlite
 ```
 
 ## Tests
@@ -92,27 +91,32 @@ Tests run on Redis DB `1` (never touches DB `0` real data). Uses `FLUSHDB` per m
 ```bash
 docker compose up -d
 TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
-# With SQLite tests too:
-TEST_REDIS_URL=redis://localhost:6379/1 cargo test --features rusqlite -- --test-threads 1
+
+# Solo SQLite
+cargo test sqlite_tests -- --test-threads 1
+
+# Solo Redis
+TEST_REDIS_URL=redis://localhost:6379/1 cargo test redis_tests -- --test-threads 1
 
 ## Architecture
 
-6 source files, single-threaded MCP server via stdio transport (`rmcp` SDK from git):
+Single-threaded MCP server via stdio transport (`rmcp` SDK from git):
 
 ### `src/main.rs` — CLI entry point
 Parses `--cwd`, `--project`, `--invariants`, `--db-type`, `--redis-url`, `--db-path` with clap. Builds `DbConfig` from args, calls `DbConfig::connect()` to get `Box<dyn Database>`. Creates/loads project, creates test run. Serves `SynthesisTools` over rmcp stdio transport. Debug logging via `eprintln!` (`[DEBUG]` prefix).
 
-### `src/db.rs` — Database trait + Redis + SQLite implementations
-Three layers:
+### `src/db/` — Database trait, Redis + SQLite implementations
 
-**`Database` trait** — 10 methods, all `&self`, bound `Send`. Return `Result<_, DbError>`:
-`get_or_create_project`, `create_test_run`, `record_trial`, `get_max_iteration`, `increment_compilation_passed`, `increment_compilation_not_passed`, `get_project`, `get_metrics`.
+**`src/db/mod.rs`** — Shared definitions:
+- Data structs: `Project`, `TestRun`, `SynthesisTrial`, `Metrics`
+- `DbError` enum — `Redis(::redis::RedisError)`, `Sqlite(rusqlite::Error)`, `InvalidResultType(String)`. Implements `Display` + `std::error::Error` + `From` for both error types.
+- `Database` trait — 10 methods, all `&self`, bound `Send`:
+  `get_or_create_project`, `create_test_run`, `record_trial`, `get_max_iteration`,
+  `increment_compilation_passed`, `increment_compilation_not_passed`, `get_project`, `get_metrics`
+- `DbConfig` factory enum — `Redis { url }` + `Sqlite { path }`. `connect() -> Result<Box<dyn Database>, DbError>`.
+- `validate_trial_params()` — shared validation for result_type + invariant constraints
 
-**`DbError` enum** — `Redis(redis::RedisError)`, `Sqlite(rusqlite::Error)` (cfg-gated), `InvalidResultType(String)`. Implements `Display` + `std::error::Error`.
-
-**`DbConfig` factory enum** — `Redis { url }` + `Sqlite { path }` (cfg-gated). `connect() -> Result<Box<dyn Database>, DbError>`.
-
-**`RedisDatabase`** — uses `redis` crate. Redis key schema:
+**`src/db/redis.rs`** — `RedisDatabase` struct + `impl Database`. Redis key schema:
 
 ```
 project:ids                                         -> INCR counter
@@ -128,9 +132,7 @@ synthesis_trial:by_project:{project_id}             -> Set of trial_ids
 synthesis_trial:gas:by_project:{project_id}         -> Sorted Set (member=trial_id, score=gas)
 ```
 
-Shared validation via `validate_trial_params()` free fn.
-
-**`SqliteDatabase`** — behind `#[cfg(feature = "rusqlite")]`. Same schema in SQL tables. `run_migrations()` handles CREATE TABLE + CHECK constraint expansion.
+**`src/db/sqlite.rs`** — `SqliteDatabase` struct + `impl Database`. Same schema in SQL tables. `run_migrations()` handles CREATE TABLE + CHECK constraint expansion for `succeeded_fuzzing`.
 
 **Note:** `get_max_iteration` scoped per `test_run_id` (not per project). Multiple test runs in same project each track their own iteration counter.
 
@@ -145,7 +147,9 @@ Constraints: succeeded_* must be last trial in test_run; `not_proved_invariants 
 
 **Metrics:** `get_metrics()` aggregates in Rust from Redis indices (no SQL GROUP BY) or via SQL queries for SQLite.
 
-**Tests:** Inline `mod redis_tests` (15 tests, FLUSHDB on DB 1) + `mod sqlite_tests` (15 tests, `:memory:`).
+**Tests:**
+- `src/db/redis_test.rs` — 15 tests, `FLUSHDB` on DB 1 per module
+- `src/db/sqlite_test.rs` — 15 tests, `:memory:` per module
 
 ### `src/tools.rs` — MCP tool definitions
 4 tools via `rmcp` `#[tool]` + `#[tool_router]` macros:
@@ -178,15 +182,14 @@ halmos → counterexample → record failed_halmos
 
 Pauses for iteration increments between phases. Each call to `run()` increments iteration counter (resumed from DB max). Records every trial with typed result.
 
-**Gas extraction** (important — differs from earlier docs):
-Extracts gas from `forge test --json` structured output, NOT from regex on stdout. `extract_forge_gas_json()` parses JSON into `HashMap<String, ForgeSuite>` then extracts:
+**Gas extraction:** Parses `forge test --json` structured output into `HashMap<String, ForgeSuite>`:
 - Unit tests → `kind.Unit.gas`
 - Fuzz tests → `kind.Fuzz.mean_gas`
-Sums all values into `forge_gas` field, stored in DB trial records.
+Sums all values into `forge_gas` field.
 
 Halmos flags: `--solver-threads 16`, `--early-exit`, `--print-full-model`, `--solver-timeout-branching 1s`, `--solver-timeout-assertion 1s`.
 
-**Testing:** `pipeline_test.rs` via `#[path = "pipeline_test.rs"] mod tests;`. Uses `mock_commands: Vec<Result<...>>` for deterministic stage mocking. 12 tests covering: build pass/fail, test fail, halmos full/partial/counterexample, multi-iteration loop, gas JSON extraction, not_proved parsing, iteration resume from DB, full metrics.
+**Testing:** `pipeline_test.rs` via `#[path = "pipeline_test.rs"] mod tests;`. Uses `mock_commands: Vec<Result<...>>` for deterministic stage mocking. 12 tests.
 
 ### `docker-compose.yml` — Redis for dev/testing
 ```bash
@@ -195,9 +198,9 @@ docker compose down       # or: just redis-down
 ```
 
 ### `src/bin/migrate_sqlite_to_redis.rs` — Data migration
-Standalone binary (requires `rusqlite` feature):
+Standalone binary:
 ```bash
-cargo run --features rusqlite --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:6379
+cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:6379
 ```
 
 ## Key Patterns
@@ -206,9 +209,10 @@ cargo run --features rusqlite --bin migrate -- --sqlite-path <path> --redis-url 
 - `std::process::Command` for forge/halmos subprocess calls
 - `#[cfg(test)] pub mock_commands: Option<Vec<Result<(String, bool), String>>>` for pipeline test mocking
 - `redis` with `tokio-comp` feature (pure Rust Redis client, no system dep)
-- `rusqlite` optional dep with `bundled` feature (embeds libsqlite3)
+- `rusqlite` with `bundled` feature (embeds libsqlite3, no system dep)
 - `DbConfig` factory enum for polymorphic backend creation
 - `Box<dyn Database>` trait objects in `Mutex` for rmcp compatibility
+- `::redis::Commands` / `::redis::RedisError` qualified paths (edition 2024 module name collision with `db::redis` submodule)
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
 - `eprintln!` debug logging with `[DEBUG]` prefix throughout
 - Edition 2024, musl target for static linking
@@ -221,5 +225,5 @@ cargo run --features rusqlite --bin migrate -- --sqlite-path <path> --redis-url 
 - `clap` — CLI arg parsing
 - `redis` — Redis client (pure Rust, no system dep)
 - `chrono` — ISO 8601 timestamps for created_at
-- `rusqlite` — SQLite (optional, behind `rusqlite` feature)
+- `rusqlite` — SQLite, `bundled` feature embeds libsqlite3 (unconditional)
 - `tempfile` — temp DBs in tests (dev-dependency only)

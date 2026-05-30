@@ -1,6 +1,6 @@
 # Solidity Synthesis MCP Server
 
-An MCP (Model Context Protocol) server for automated Solidity code synthesis and verification. Orchestrates **Foundry** compilation/fuzzing and **Halmos** symbolic model checking, persisting every trial in **SQLite** for metrics and analytics.
+An MCP (Model Context Protocol) server for automated Solidity code synthesis and verification. Orchestrates **Foundry** compilation/fuzzing and **Halmos** symbolic model checking, persisting every trial in **Redis** or **SQLite** for metrics and analytics.
 
 ```
  LLM / Agent          MCP Server                CLI Tools
@@ -11,8 +11,8 @@ An MCP (Model Context Protocol) server for automated Solidity code synthesis and
 │          │           │  run_synthesis   │ →  │ forge →  │
 └──────────┘           │                  │    │ halmos   │
                        │  ┌────────────┐  │    └──────────┘
-                       │  │  SQLite DB  │  │
-                       │  │ (telemetry) │  │
+                       │  │ Redis/SQL  │  │
+                       │  │ (telemetry)│  │
                        │  └────────────┘  │
                        └──────────────────┘
 ```
@@ -23,8 +23,8 @@ An MCP (Model Context Protocol) server for automated Solidity code synthesis and
 - **`forge_build`** — Compile with `forge build`, capture success/failure telemetry
 - **`forge_test`** — Run unit and fuzzy tests with detailed failure logs
 - **`run_synthesis`** — Full automated pipeline: compile → test → Halmos verification, with DB recording
-- **SQLite persistence** — Projects, test runs, synthesis trials with type-constrained result tracking
-- **Metrics** — Gas consumption (avg/peak), compilation success rate, verification depth, synthesis efficiency
+- **Redis + SQLite persistence** — Projects, test runs, synthesis trials with type-constrained result tracking. Switch via `--db-type` at runtime.
+- **Metrics** — Gas consumption (median/peak), compilation success rate, verification depth, synthesis efficiency
 - **Halmos formal verification** — Invariant proof tracking with partial model checking support
 
 ## Prerequisites
@@ -32,27 +32,22 @@ An MCP (Model Context Protocol) server for automated Solidity code synthesis and
 - **Rust** 1.70+ (edition 2024)
 - **Foundry** — `forge` binary on PATH ([install guide](https://book.getfoundry.sh/getting-started/installation))
 - **Halmos** — `halmos` binary on PATH ([install guide](https://github.com/a16z/halmos))
+- **Redis** (optional) — for Redis backend. Start via `docker compose up -d`.
 
 ## Install
 
 ```bash
-git clone <repo>
-cd my-mcp-server
 cargo build --release
 ```
 
 ## Usage
 
 ```bash
-# Minimal — uses defaults for DB path and invariants
+# Redis backend (default)
 cargo run -- --cwd ./my-foundry-project --project my-contracts
 
-# Full options
-cargo run -- \
-  --cwd ./my-foundry-project \
-  --project my-contracts \
-  --invariants 5 \
-  --db-path ~/Documents/my-synthesis.db
+# SQLite backend
+cargo run -- --cwd ./my-foundry-project --project my-contracts --db-type sqlite
 ```
 
 ### CLI Arguments
@@ -62,7 +57,9 @@ cargo run -- \
 | `--cwd` | `-c` | Foundry project directory (required) | — |
 | `--project` | `-p` | Project name identifier (required) | — |
 | `--invariants` | `-i` | Number of Halmos invariants to verify | `0` |
-| `--db-path` | `-d` | SQLite database location | `$HOME/Documents/solidity-synthesis.db` |
+| `--db-type` | | Backend: `redis` or `sqlite` | `redis` |
+| `--redis-url` | `-u` | Redis server URL | `redis://localhost:6379` |
+| `--db-path` | `-l` | SQLite database file (when `--db-type sqlite`) | `$HOME/Documents/solidity-synthesis.db` |
 
 ### Claude Code
 
@@ -76,7 +73,7 @@ claude mcp add --transport stdio --scope project solidity-synthesis \
 Add user-global (all projects):
 ```bash
 claude mcp add --transport stdio --scope user solidity-synthesis \
-  "cargo run --manifest-path /abs/path/to/my-mcp-server/Cargo.toml -- \
+  "cargo run --manifest-path /abs/path/to/mcp-synthesizer/Cargo.toml -- \
     --cwd /abs/path/to/foundry/project \
     --project my-project \
     --invariants 5"
@@ -104,7 +101,7 @@ Edit `claude_desktop_config.json`:
       "command": "cargo",
       "args": [
         "run",
-        "--manifest-path", "/path/to/my-mcp-server/Cargo.toml",
+        "--manifest-path", "/path/to/mcp-synthesizer/Cargo.toml",
         "--",
         "--cwd", "/path/to/foundry/project",
         "--project", "my-project",
@@ -148,9 +145,10 @@ accept (partial model checking)
 synthesis successful ✓
 ```
 
-Each attempt is recorded as a `synthesis_trial` in SQLite with one of five result types:
+Each attempt is recorded as a `synthesis_trial` with one of six result types:
 - `failed_compilation` — forge build failed
 - `failed_fuzzing` — forge test failed
+- `succeeded_fuzzing` — forge test passed (standalone, no halmos)
 - `failed_halmos` — Halmos found a counterexample
 - `succeeded_partial` — Halmos timed out or partially proved (accepted)
 - `succeeded_full` — All invariants proven
@@ -162,13 +160,25 @@ Each attempt is recorded as a `synthesis_trial` in SQLite with one of five resul
 
 ## Database Schema
 
-The SQLite database (`solidity-synthesis.db`) contains three tables:
+### Redis key schema
 
-- **`project`** — name (unique), number of invariants
-- **`test_run`** — belongs to project, tracks compilation pass/fail counts
-- **`synthesis_trial`** — belongs to test run, iteration number, gas, result type, failure detail
+```
+project:ids                                         -> INCR counter
+project:{id}                                        -> Hash { name, number_invariants, created_at }
+project:name:{name}                                 -> String (id, for uniqueness check)
+test_run:ids                                        -> INCR counter
+test_run:{id}                                       -> Hash { project_id, compilation_passed, compilation_not_passed, created_at }
+test_run:by_project:{project_id}                    -> Set of test_run_ids
+synthesis_trial:ids                                 -> INCR counter
+synthesis_trial:{id}                                -> Hash { test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at }
+synthesis_trial:by_test_run:{test_run_id}           -> Sorted Set (member=trial_id, score=iteration)
+synthesis_trial:by_project:{project_id}             -> Set of trial_ids
+synthesis_trial:gas:by_project:{project_id}         -> Sorted Set (member=trial_id, score=gas)
+```
 
-Query metrics with any SQLite client:
+### SQLite schema
+
+Three tables: `project`, `test_run`, `synthesis_trial`. Query with any SQLite client:
 
 ```sql
 -- All trials for a project
@@ -190,19 +200,28 @@ GROUP BY p.name;
 
 ```
 src/
-├── main.rs       # CLI entry point, arg parsing, server init
-├── db.rs         # SQLite schema, CRUD, metrics aggregation
-├── tools.rs      # MCP tool definitions (forge_install, forge_build, forge_test, run_synthesis)
-└── pipeline.rs   # Build → test → halmos orchestration
+├── main.rs          # CLI entry point, arg parsing, server init
+├── db/
+│   ├── mod.rs       # Database trait, DbError, DbConfig, data structs
+│   ├── redis.rs     # RedisDatabase implementation
+│   ├── sqlite.rs    # SqliteDatabase implementation with migrations
+│   ├── redis_test.rs  # Redis unit tests (FLUSHDB on DB 1)
+│   └── sqlite_test.rs # SQLite unit tests (:memory:)
+├── tools.rs         # MCP tool definitions (forge_install, forge_build, forge_test, run_synthesis)
+├── pipeline.rs      # Build → test → halmos orchestration
+└── pipeline_test.rs # Pipeline tests with mock commands
 ```
 
 ## Development
 
-Built with the Rust MCP SDK (`rmcp` v1.5.0) using the `#[tool]` and `#[tool_router]` macros. All tools are synchronous and use `std::process::Command` for CLI tool interaction. Database access is wrapped in `Mutex` for thread safety under `rmcp`'s async handler model.
+Built with the Rust MCP SDK (`rmcp`) using the `#[tool]` and `#[tool_router]` macros. All tools are synchronous and use `std::process::Command` for CLI tool interaction. Database access is wrapped in `Mutex<Box<dyn Database>>` for thread safety under `rmcp`'s async handler model.
 
 ```bash
 # Build
 cargo build
+
+# Test
+TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
 
 # Test with MCP Inspector
 npx @modelcontextprotocol/inspector --transport stdio -- \
