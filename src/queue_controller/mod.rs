@@ -134,11 +134,12 @@ pub fn run() -> Result<()> {
             &job.project,
         )?;
 
-        // 9. Launch Claude Code with synthesis prompt (blocking),
-        //    pipe through jq, save to {model_name}_{job_id}.json.
+        // 9. Kill stale mcp_synth from parent session, then launch Claude Code
+        //    with synthesis prompt, pipe through jq, save to {model_name}_{job_id}.json.
+        claude::kill_existing_mcp_synth();
         eprintln!("[DEBUG] Launching Claude Code...");
         let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
-        let claude_result = claude::launch_claude(&project_dir, &job.prompt, &output_path);
+        let claude_result = claude::launch_claude(&project_dir, &job.prompt, &output_path, model_name);
 
         // 10. Restore original settings regardless of outcome.
         claude::restore_claude_settings(&project_dir, backup)?;

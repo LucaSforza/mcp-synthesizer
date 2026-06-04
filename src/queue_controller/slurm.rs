@@ -217,7 +217,8 @@ pub fn get_job_node(cluster_host: &str, job_id: &str) -> Result<String> {
 /// Convert node hostname to IP using convention: `node123` → `10.0.0.23`.
 pub fn node_name_to_ip(node_name: &str) -> String {
     let digits: String = node_name.chars().filter(|c| c.is_ascii_digit()).collect();
-    format!("10.0.0.{}", digits)
+    let suffix = if digits.len() > 2 { &digits[digits.len() - 2..] } else { &digits };
+    format!("10.0.0.{}", suffix)
 }
 
 /// Establish SSH port forwarding: `ssh -L port:node_ip:port cluster_host -N`.

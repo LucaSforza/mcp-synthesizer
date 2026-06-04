@@ -9,22 +9,29 @@ pub fn resolve_project_dir(project_root: &Path, project_name: &str) -> PathBuf {
     project_root.join(project_name)
 }
 
-/// Generate `.claude/settings.json` for project.
-/// Backs up existing file if present, returns backup path.
+/// Inject `mcpServers` into `.claude/settings.local.json` (takes precedence over settings.json).
+/// Backs up existing file, returns backup path.
 pub fn setup_claude_settings(
     project_dir: &Path,
-    model_url: &str,
-    model_name: &str,
+    _model_url: &str,
+    _model_name: &str,
     mcp_cwd: &str,
     mcp_project: &str,
 ) -> Result<Option<PathBuf>> {
     let claude_dir = project_dir.join(".claude");
-    let settings_path = claude_dir.join("settings.json");
+    let settings_path = claude_dir.join("settings.local.json");
 
     std::fs::create_dir_all(&claude_dir)?;
 
+    // Read existing settings, or start empty.
+    let mut settings: serde_json::Value = match std::fs::read_to_string(&settings_path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+
+    // Backup original.
+    let backup_path = claude_dir.join("settings.local.json.queue_backup");
     let backup = if settings_path.exists() {
-        let backup_path = settings_path.with_extension("settings.json.queue_backup");
         std::fs::copy(&settings_path, &backup_path)?;
         eprintln!("[DEBUG] Backed up settings to {backup_path:?}");
         Some(backup_path)
@@ -32,15 +39,23 @@ pub fn setup_claude_settings(
         None
     };
 
-    let settings = serde_json::json!({
-        "modelProvider": "custom",
-        "customModel": {
-            "url": model_url,
-            "modelName": model_name,
-            "apiKey": "not-needed",
-            "modelCapabilities": ["completion"],
-            "provider": "openai"
-        },
+    // Inject mcpServers while preserving all existing settings.
+    settings["mcpServers"] = serde_json::json!({
+        "mcp_synth": {
+            "command": "mcp_synth",
+            "args": [
+                "--cwd", mcp_cwd,
+                "--project", mcp_project,
+                "--db-type", "redis"
+            ],
+            "env": {}
+        }
+    });
+
+    let content = serde_json::to_string_pretty(&settings)?;
+    std::fs::write(&settings_path, content)?;
+    // Also write standalone MCP config file for --mcp-config flag.
+    let mcp_cfg: serde_json::Value = serde_json::json!({
         "mcpServers": {
             "mcp_synth": {
                 "command": "mcp_synth",
@@ -53,25 +68,28 @@ pub fn setup_claude_settings(
             }
         }
     });
-
-    let content = serde_json::to_string_pretty(&settings)?;
-    std::fs::write(&settings_path, content)?;
-    eprintln!("[DEBUG] Wrote MCP settings to {settings_path:?}");
+    let mcp_path = claude_dir.join("mcp_config.json");
+    std::fs::write(&mcp_path, serde_json::to_string_pretty(&mcp_cfg)?)?;
+    eprintln!("[DEBUG] Injected mcpServers into {settings_path:?}");
     Ok(backup)
 }
 
-/// Restore original settings or remove temp file.
+/// Restore original `.settings.local.json` from backup.
 pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> Result<()> {
-    let settings_path = project_dir.join(".claude").join("settings.json");
+    let settings_path = project_dir.join(".claude").join("settings.local.json");
+    // Clean up mcp_config.json if present.
+    let mcp_path = project_dir.join(".claude").join("mcp_config.json");
+    let _ = std::fs::remove_file(&mcp_path);
     match backup {
         Some(ref backup_path) if backup_path.exists() => {
             std::fs::copy(backup_path, &settings_path)?;
             let _ = std::fs::remove_file(backup_path);
-            eprintln!("[DEBUG] Restored original settings");
+            eprintln!("[DEBUG] Restored original settings.local.json");
         }
-        _ => {
+        // No backup means we created settings.local.json — remove it.
+        Some(_) | None => {
             let _ = std::fs::remove_file(&settings_path);
-            eprintln!("[DEBUG] Removed temporary settings");
+            eprintln!("[DEBUG] Removed injected settings.local.json");
         }
     }
     Ok(())
@@ -79,16 +97,43 @@ pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> R
 
 use std::io::Write;
 
+/// Kill any existing mcp_synth inherited from parent claude session.
+/// Spawns a fresh one from our settings when Claude Code launches.
+pub fn kill_existing_mcp_synth() {
+    let output = Command::new("pkill")
+        .args(["-f", "mcp_synth"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(o) if o.status.success() => eprintln!("[DEBUG] Killed existing mcp_synth process"),
+        _ => eprintln!("[DEBUG] No existing mcp_synth to kill"),
+    }
+}
+
 /// Launch Claude Code with prompt in project directory (blocking).
 /// Pipes output through `jq` for formatting, writes to `output_path`.
-pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path) -> Result<()> {
+pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path, model_name: &str) -> Result<()> {
     let file = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create output file {output_path:?}"))?;
 
-    // Run claude -p --output-format json and capture stdout.
+    // Use --strict-mcp-config to avoid inheriting parent session's MCP servers.
+    // Override env vars to ensure correct model URL and name regardless of settings.
+    let mcp_config_path = project_dir.join(".claude").join("mcp_config.json");
+    let mcp_config_str = mcp_config_path.to_string_lossy().to_string();
     let claude = Command::new("claude")
-        .args(["-p", "--output-format", "json", prompt])
+        .args([
+            "-p",
+            "--output-format",
+            "json",
+            "--mcp-config",
+            &mcp_config_str,
+            "--strict-mcp-config",
+            prompt,
+        ])
         .current_dir(project_dir)
+        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")
+        .env("ANTHROPIC_MODEL", model_name)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
