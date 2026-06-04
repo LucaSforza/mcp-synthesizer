@@ -111,7 +111,12 @@ pub fn kill_existing_mcp_synth() {
 
 /// Launch Claude Code with prompt in project directory (blocking).
 /// Pipes output through `jq` for formatting, writes to `output_path`.
-pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path, model_name: &str) -> Result<()> {
+pub fn launch_claude(
+    project_dir: &Path,
+    prompt: &str,
+    output_path: &Path,
+    model_name: &str,
+) -> Result<()> {
     let file = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create output file {output_path:?}"))?;
 
@@ -125,6 +130,7 @@ pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path, model
             "--output-format",
             "stream-json",
             "--dangerously-skip-permissions",
+            "--include-hook-events",
             "--verbose",
             "--mcp-config",
             &mcp_config_str,
