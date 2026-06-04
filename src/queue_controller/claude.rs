@@ -95,8 +95,6 @@ pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> R
     Ok(())
 }
 
-use std::io::Write;
-
 /// Kill any existing mcp_synth inherited from parent claude session.
 /// Spawns a fresh one from our settings when Claude Code launches.
 pub fn kill_existing_mcp_synth() {
@@ -121,11 +119,13 @@ pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path, model
     // Override env vars to ensure correct model URL and name regardless of settings.
     let mcp_config_path = project_dir.join(".claude").join("mcp_config.json");
     let mcp_config_str = mcp_config_path.to_string_lossy().to_string();
-    let claude = Command::new("claude")
+    let status = Command::new("claude")
         .args([
             "-p",
             "--output-format",
-            "json",
+            "stream-json",
+            "--dangerously-skip-permissions",
+            "--verbose",
             "--mcp-config",
             &mcp_config_str,
             "--strict-mcp-config",
@@ -135,32 +135,14 @@ pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path, model
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")
         .env("ANTHROPIC_MODEL", model_name)
         .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output()
-        .context("failed to launch Claude Code")?;
-
-    if !claude.status.success() {
-        let stderr = String::from_utf8_lossy(&claude.stderr);
-        bail!("Claude Code exited with status {}: {stderr}", claude.status);
-    }
-
-    // Pipe through jq for pretty formatting.
-    let mut jq = Command::new("jq")
-        .stdin(Stdio::piped())
         .stdout(Stdio::from(file))
         .stderr(Stdio::inherit())
-        .spawn()
-        .context("failed to spawn jq")?;
+        .status()
+        .context("failed to launch Claude Code")?;
 
-    if let Some(ref mut stdin) = jq.stdin {
-        stdin.write_all(&claude.stdout)?;
+    if !status.success() {
+        bail!("Claude Code exited with status {status}");
     }
-    drop(jq.stdin.take());
 
-    let jq_status = jq.wait()?;
-    if !jq_status.success() {
-        bail!("jq formatting failed with status {jq_status}");
-    }
     Ok(())
 }
