@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -157,5 +157,66 @@ fn get_job_state(cluster_host: &str, job_id: &str) -> Result<Option<String>> {
         Ok(None)
     } else {
         Ok(Some(stdout))
+    }
+}
+
+/// Handle for SSH port forwarding tunnel. Kills tunnel on drop.
+pub struct TunnelHandle {
+    child: Child,
+}
+
+/// Get compute node hostname for a Slurm job via squeue.
+pub fn get_job_node(cluster_host: &str, job_id: &str) -> Result<String> {
+    let output = Command::new("ssh")
+        .args([
+            cluster_host,
+            "squeue",
+            "--job",
+            job_id,
+            "--noheader",
+            "--format",
+            "%N",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to get node for job {job_id}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() || stdout == "N/A" {
+        bail!("could not determine compute node for job {job_id}");
+    }
+    Ok(stdout)
+}
+
+/// Convert node hostname to IP using convention: `node123` → `10.0.0.23`.
+pub fn node_name_to_ip(node_name: &str) -> String {
+    let digits: String = node_name.chars().filter(|c| c.is_ascii_digit()).collect();
+    format!("10.0.0.{}", digits)
+}
+
+/// Establish SSH port forwarding: `ssh -L port:node_ip:port cluster_host -N`.
+pub fn establish_tunnel(cluster_host: &str, node_ip: &str, port: u16) -> Result<TunnelHandle> {
+    let child = Command::new("ssh")
+        .args([
+            "-L",
+            &format!("{port}:{node_ip}:{port}"),
+            cluster_host,
+            "-N",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to spawn SSH tunnel")?;
+    eprintln!("[DEBUG] SSH tunnel established: localhost:{port} -> {node_ip}:{port}");
+    Ok(TunnelHandle { child })
+}
+
+impl Drop for TunnelHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        eprintln!("[DEBUG] SSH tunnel closed");
     }
 }

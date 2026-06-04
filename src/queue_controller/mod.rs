@@ -46,6 +46,10 @@ pub struct Args {
     /// Max wait time in seconds for Slurm job to reach RUNNING state.
     #[arg(long, default_value_t = 1800)]
     pub poll_timeout: u64,
+
+    /// Port for SSH tunnel to reach the model server on the cluster.
+    #[arg(long, default_value_t = 8080)]
+    pub tunnel_port: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +108,11 @@ pub fn run() -> Result<()> {
             args.poll_interval,
             args.poll_timeout,
         )?;
+
+        // 6b. Resolve compute node IP and establish SSH tunnel.
+        let node_name = slurm::get_job_node(&args.cluster_host, &slurm_job_id)?;
+        let node_ip = slurm::node_name_to_ip(&node_name);
+        let _tunnel = slurm::establish_tunnel(&args.cluster_host, &node_ip, args.tunnel_port)?;
 
         // 7. Resolve project directory; validate it exists.
         let project_dir = claude::resolve_project_dir(&args.project_root, &job.project);
