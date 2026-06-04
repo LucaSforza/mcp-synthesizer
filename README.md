@@ -1,6 +1,21 @@
-# Solidity Synthesis MCP Server
+# Solidity Synthesis — MCP Server & Automation Tools
 
-An MCP (Model Context Protocol) server for automated Solidity code synthesis and verification. Orchestrates **Foundry** compilation/fuzzing and **Halmos** symbolic model checking, persisting every trial in **Redis** or **SQLite** for metrics and analytics.
+Toolkit for automated Solidity contract synthesis and verification. Part of the `git_diff_checker` project.
+
+Four executables, one crate:
+
+| Binary | Path | Purpose |
+|--------|------|---------|
+| `mcp_synth` | `src/main.rs` | MCP server exposing Foundry + Halmos as tools |
+| `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
+| `populate_queue` | `src/bin/populate_queue.rs` | Batch enqueue synthesis jobs into Redis |
+| `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |
+
+---
+
+## 1. `mcp_synth` — Synthesis MCP Server
+
+Exposes Foundry and Halmos to LLM agents (Claude Code, Claude Desktop) via the Model Context Protocol. Orchestrates compilation, fuzzing, and symbolic model checking, persisting trials in Redis or SQLite.
 
 ```
  LLM / Agent          MCP Server                CLI Tools
@@ -17,117 +32,54 @@ An MCP (Model Context Protocol) server for automated Solidity code synthesis and
                        └──────────────────┘
 ```
 
-## Features
-
-- **`forge_install`** — Install Foundry project dependencies
-- **`forge_build`** — Compile with `forge build`, capture success/failure telemetry
-- **`forge_test`** — Run unit and fuzzy tests with detailed failure logs
-- **`run_synthesis`** — Full automated pipeline: compile → test → Halmos verification, with DB recording
-- **Redis + SQLite persistence** — Projects, test runs, synthesis trials with type-constrained result tracking. Switch via `--db-type` at runtime.
-- **Metrics** — Gas consumption (median/peak), compilation success rate, verification depth, synthesis efficiency
-- **Halmos formal verification** — Invariant proof tracking with partial model checking support
-
-## Prerequisites
+### Prerequisites
 
 - **Rust** 1.70+ (edition 2024)
-- **Foundry** — `forge` binary on PATH ([install guide](https://book.getfoundry.sh/getting-started/installation))
-- **Halmos** — `halmos` binary on PATH ([install guide](https://github.com/a16z/halmos))
-- **Redis** (optional) — for Redis backend. Start via `docker compose up -d`.
+- **Foundry** — `forge` on PATH ([install](https://book.getfoundry.sh/getting-started/installation))
+- **Halmos** — `halmos` on PATH ([install](https://github.com/a16z/halmos))
+- **Redis** (optional, for Redis backend) — `docker compose up -d`
 
-## Install
+### Install
 
 ```bash
 cargo build --release
 ```
 
-## Usage
+Binary at `target/release/mcp_synth`.
+
+### Usage
 
 ```bash
 # Redis backend (default)
-cargo run -- --cwd ./my-foundry-project --project my-contracts
+mcp_synth --cwd ./my-foundry-project --project my-contracts
 
 # SQLite backend
-cargo run -- --cwd ./my-foundry-project --project my-contracts --db-type sqlite
+mcp_synth --cwd ./my-foundry-project --project my-contracts --db-type sqlite
 ```
 
 ### CLI Arguments
 
 | Flag | Short | Description | Default |
-|---|---|---|---|
+|------|-------|-------------|---------|
 | `--cwd` | `-c` | Foundry project directory (required) | — |
 | `--project` | `-p` | Project name identifier (required) | — |
-| `--invariants` | `-i` | Number of Halmos invariants to verify | `0` |
+| `--invariants` | `-i` | Number of Halmos invariants | `0` |
 | `--db-type` | | Backend: `redis` or `sqlite` | `redis` |
-| `--redis-url` | `-u` | Redis server URL | `redis://localhost:6379` |
-| `--db-path` | `-l` | SQLite database file (when `--db-type sqlite`) | `$HOME/Documents/solidity-synthesis.db` |
+| `--redis-url` | `-u` | Redis URL | `redis://localhost:6379` |
+| `--db-path` | `-l` | SQLite path (when `--db-type sqlite`) | `$HOME/Documents/solidity-synthesis.db` |
 
-### Claude Code
+### MCP Tools
 
-Add project-level (recommended):
-```bash
-claude mcp add --transport stdio --scope project solidity-synthesis \
-  "cargo run --manifest-path ./Cargo.toml -- \
-    --cwd . --project my-project --invariants 5"
-```
-
-Add user-global (all projects):
-```bash
-claude mcp add --transport stdio --scope user solidity-synthesis \
-  "cargo run --manifest-path /abs/path/to/mcp-synthesizer/Cargo.toml -- \
-    --cwd /abs/path/to/foundry/project \
-    --project my-project \
-    --invariants 5"
-```
-
-Remove:
-```bash
-claude mcp remove solidity-synthesis
-```
-
-### Claude Desktop
-
-Edit `claude_desktop_config.json`:
-
-| Platform | Path |
-|---|---|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-
-```json
-{
-  "mcpServers": {
-    "solidity-synthesis": {
-      "command": "cargo",
-      "args": [
-        "run",
-        "--manifest-path", "/path/to/mcp-synthesizer/Cargo.toml",
-        "--",
-        "--cwd", "/path/to/foundry/project",
-        "--project", "my-project",
-        "--invariants", "5"
-      ]
-    }
-  }
-}
-```
-
-After editing, restart Claude Desktop.
-
-## Tools
-
-All tools expose typed annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) for correct auto-permission behavior in Claude.
+All tools expose typed annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`) for correct auto-permission in Claude.
 
 | Tool | Annotations | Description |
-|---|---|---|
-| `forge_install` | !readOnly, !destructive, idempotent | Install project dependencies |
-| `forge_build` | !readOnly, !destructive, idempotent | Compile project, records pass/fail in DB |
-| `forge_test` | **readOnly**, !destructive, idempotent | Run forge test suite |
+|------|-------------|-------------|
+| `forge_install` | !readOnly, !destructive, idempotent | Install project deps |
+| `forge_build` | !readOnly, !destructive, idempotent | Compile, record pass/fail |
+| `forge_test` | **readOnly**, !destructive, idempotent | Run test suite |
 | `run_synthesis` | !readOnly, !destructive, !idempotent | Full pipeline with DB recording |
 
-## Synthesis Pipeline
-
-When `run_synthesis` is called, the server executes this gated pipeline:
+### Synthesis Pipeline
 
 ```
 forge build ──fail──→ return compiler error
@@ -145,40 +97,192 @@ accept (partial model checking)
 synthesis successful ✓
 ```
 
-Each attempt is recorded as a `synthesis_trial` with one of six result types:
-- `failed_compilation` — forge build failed
-- `failed_fuzzing` — forge test failed
-- `succeeded_fuzzing` — forge test passed (standalone, no halmos)
-- `failed_halmos` — Halmos found a counterexample
-- `succeeded_partial` — Halmos timed out or partially proved (accepted)
-- `succeeded_full` — All invariants proven
+Six result types: `failed_compilation`, `failed_fuzzing`, `succeeded_fuzzing`, `failed_halmos`, `succeeded_partial`, `succeeded_full`.
 
-### Constraints
+### Claude Code Integration
 
-- Only the last trial in a test run can be `succeeded_*`; all preceding trials must be `failed_*`
-- In a succeeded trial: `not_proved_invariants ≤ number_of_invariants`
+Add project-level:
+```bash
+claude mcp add --transport stdio --scope project solidity-synthesis \
+  "cargo run --manifest-path ./Cargo.toml -- \
+    --cwd . --project my-project --invariants 5"
+```
+
+Add user-global:
+```bash
+claude mcp add --transport stdio --scope user solidity-synthesis \
+  "cargo run --manifest-path /abs/path/to/mcp-synthesizer/Cargo.toml -- \
+    --cwd /abs/path/to/foundry/project --project my-project --invariants 5"
+```
+
+Remove:
+```bash
+claude mcp remove solidity-synthesis
+```
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`:
+
+| Platform | Path |
+|----------|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "solidity-synthesis": {
+      "command": "mcp_synth",
+      "args": [
+        "--cwd", "/path/to/foundry/project",
+        "--project", "my-project",
+        "--invariants", "5"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## 2. `queue_controller` — Automated Slurm Synthesis Executor
+
+Reads synthesis jobs from a Redis priority queue, submits Slurm jobs for model serving, launches Claude Code with MCP integration. Processes sequentially until the queue is empty.
+
+### Redis Schema
+
+```
+cluster_runs                    Sorted Set (member="{model}:{job_id}", score=priority)
+{model_name}:{job_id}           Hash { seed, project, prompt, model_name }
+```
+
+### Usage
+
+```bash
+queue_controller \
+    --models-path ~/dll/llm/models \
+    --project-root ~/dll/projects
+```
+
+### CLI Arguments
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--models-path` | GGUF model directory (required) | — |
+| `--project-root` | Synthesis projects directory (required) | — |
+| `--redis-url` | Redis URL | `redis://localhost:6379` |
+| `--model-url` | OpenAI-compatible endpoint | `http://127.0.0.1:8080/v1` |
+| `--cluster-host` | SSH hostname for Slurm | `cluster` |
+| `--poll-interval` | Slurm status poll interval (s) | `30` |
+| `--poll-timeout` | Max wait for RUNNING state (s) | `1800` |
+
+### Processing Loop
+
+1. ZPOPMAX `cluster_runs` → empty → exit 0
+2. Parse `{model}:{id}`, HGETALL job hash, validate fields
+3. Construct model path, generate sbatch (MODEL_PATH + SEED parameterized)
+4. `ssh cluster "sbatch"` via stdin → capture Slurm job ID
+5. Poll `squeue --format %T` until RUNNING (default 30s interval, 30m timeout)
+6. Generate `.claude/settings.json` with MCP server + model provider (backup existing)
+7. `claude --prompt "..." --cd {project_dir}` — blocking
+8. Restore original settings, repeat
+
+Fail-fast on any error. No retries.
+
+---
+
+## 3. `populate_queue` — Batch Queue Enqueuer
+
+Generates N synthesis jobs with deterministic RNG and enqueues them into Redis. One command replaces manual per-job creation for large campaigns.
+
+### Usage
+
+```bash
+populate_queue \
+    --model qwen3-solidity-27B-Q6_K.gguf \
+    --seed 42 \
+    --project my-project \
+    --prompt-file prompt.md \
+    --iterations 100
+```
+
+### CLI Arguments
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--model` | Model filename identifier (required) | — |
+| `--seed` | Initial RNG seed (required) | — |
+| `--project` | Project name (required) | — |
+| `--prompt-file` | Path to synthesis prompt file (required) | — |
+| `--iterations` | Number of jobs to generate, must be > 0 (required) | — |
+| `--redis-url` | Redis URL | `redis://localhost:6379` |
+
+### Algorithm
+
+```
+rng = ChaCha8Rng::seed_from_u64(seed)
+
+for i in 1..=iterations:
+    generated_seed = rng.next_u64()
+    HSET {model}:{i} { seed, project, prompt, model_name }
+    ZADD cluster_runs {score=i, member="{model}:{i}"}
+```
+
+Deterministic and reproducible: same input seed always produces the same sequence of generated seeds.
+
+### Validation (all upfront)
+
+- `--model` not empty
+- `--project` not empty
+- `--prompt-file` exists and is not empty
+- `--iterations` > 0
+
+---
+
+## 4. `migrate` — SQLite to Redis Migration
+
+Standalone utility for migrating synthesis data from SQLite to Redis.
+
+### Usage
+
+```bash
+cargo run --bin migrate -- \
+    --sqlite-path /path/to/solidity-synthesis.db \
+    --redis-url redis://localhost:6379
+```
+
+---
 
 ## Database Schema
 
-### Redis key schema
+### Redis Keys (Synthesis Telemetry)
 
 ```
-project:ids                                         -> INCR counter
-project:{id}                                        -> Hash { name, number_invariants, created_at }
-project:name:{name}                                 -> String (id, for uniqueness check)
-test_run:ids                                        -> INCR counter
-test_run:{id}                                       -> Hash { project_id, compilation_passed, compilation_not_passed, created_at }
-test_run:by_project:{project_id}                    -> Set of test_run_ids
-synthesis_trial:ids                                 -> INCR counter
-synthesis_trial:{id}                                -> Hash { test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at }
-synthesis_trial:by_test_run:{test_run_id}           -> Sorted Set (member=trial_id, score=iteration)
-synthesis_trial:by_project:{project_id}             -> Set of trial_ids
-synthesis_trial:gas:by_project:{project_id}         -> Sorted Set (member=trial_id, score=gas)
+project:ids                                         INCR counter
+project:{id}                                        Hash { name, number_invariants, created_at }
+project:name:{name}                                 String (project ID, uniqueness check)
+test_run:ids                                        INCR counter
+test_run:{id}                                       Hash { project_id, compilation_passed, compilation_not_passed, created_at }
+test_run:by_project:{project_id}                    Set of test_run IDs
+synthesis_trial:ids                                 INCR counter
+synthesis_trial:{id}                                Hash { test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at }
+synthesis_trial:by_test_run:{test_run_id}           Sorted Set (member=trial_id, score=iteration)
+synthesis_trial:by_project:{project_id}             Set of trial IDs
+synthesis_trial:gas:by_project:{project_id}         Sorted Set (member=trial_id, score=gas)
 ```
 
-### SQLite schema
+### Redis Keys (Queue + Automation)
 
-Three tables: `project`, `test_run`, `synthesis_trial`. Query with any SQLite client:
+```
+cluster_runs                                        Sorted Set (member="{model}:{id}", score=priority)
+{model_name}:{job_id}                               Hash { seed, project, prompt, model_name }
+```
+
+### SQLite Schema
+
+Three tables: `project`, `test_run`, `synthesis_trial`.
 
 ```sql
 -- All trials for a project
@@ -196,37 +300,66 @@ JOIN test_run tr ON tr.project_id = p.id
 GROUP BY p.name;
 ```
 
+---
+
 ## Project Structure
 
 ```
 src/
-├── main.rs          # CLI entry point, arg parsing, server init
+├── main.rs                     # mcp_synth entry point
+├── bin/
+│   ├── queue_controller.rs     # queue_controller entry point
+│   ├── populate_queue.rs       # populate_queue entry point
+│   └── migrate_sqlite_to_redis.rs  # migrate entry point
+├── queue_controller/
+│   ├── mod.rs                  # Orchestrator loop + Args
+│   ├── queue.rs                # Redis queue client
+│   ├── slurm.rs                # Sbatch gen + Slurm SSH
+│   └── claude.rs               # MCP settings + Claude Code launch
 ├── db/
-│   ├── mod.rs       # Database trait, DbError, DbConfig, data structs
-│   ├── redis.rs     # RedisDatabase implementation
-│   ├── sqlite.rs    # SqliteDatabase implementation with migrations
-│   ├── redis_test.rs  # Redis unit tests (FLUSHDB on DB 1)
-│   └── sqlite_test.rs # SQLite unit tests (:memory:)
-├── tools.rs         # MCP tool definitions (forge_install, forge_build, forge_test, run_synthesis)
-├── pipeline.rs      # Build → test → halmos orchestration
-└── pipeline_test.rs # Pipeline tests with mock commands
+│   ├── mod.rs                  # Database trait, DbError, DbConfig, data structs
+│   ├── redis.rs                # RedisDatabase implementation
+│   ├── sqlite.rs               # SqliteDatabase implementation
+│   ├── redis_test.rs           # Redis tests (FLUSHDB on DB 1)
+│   └── sqlite_test.rs          # SQLite tests (:memory:)
+├── tools.rs                    # MCP tools (forge_install, forge_build, forge_test, run_synthesis)
+├── pipeline.rs                 # Build → test → halmos orchestration
+└── pipeline_test.rs            # Pipeline tests with mock commands
 ```
 
 ## Development
 
-Built with the Rust MCP SDK (`rmcp`) using the `#[tool]` and `#[tool_router]` macros. All tools are synchronous and use `std::process::Command` for CLI tool interaction. Database access is wrapped in `Mutex<Box<dyn Database>>` for thread safety under `rmcp`'s async handler model.
-
 ```bash
-# Build
-cargo build
+# Build all binaries
+cargo build --release
 
-# Test
+# Build specific binary
+cargo build --bin queue_controller
+cargo build --bin populate_queue
+
+# Test (Redis required)
+docker compose up -d
 TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
 
-# Test with MCP Inspector
-npx @modelcontextprotocol/inspector --transport stdio -- \
-  cargo run -- --cwd /tmp --project test
+# Justfile shortcuts
+just build            # release build
+just queue-controller # build queue_controller only
+just populate-queue   # build populate_queue only
+just redis-up         # start Redis
+just test             # redis-up + test + redis-down
 ```
+
+## Dependencies
+
+- `rmcp` — MCP Rust SDK (git dep)
+- `tokio` — async runtime
+- `serde`/`serde_json` — JSON parsing
+- `clap` — CLI arg parsing
+- `redis` — Redis client (pure Rust, no system dep)
+- `rusqlite` — SQLite, bundled feature embeds libsqlite3
+- `chrono` — ISO 8601 timestamps
+- `rand_chacha`/`rand_core` — deterministic RNG for seed generation
+- `anyhow` — error handling
 
 ## License
 
