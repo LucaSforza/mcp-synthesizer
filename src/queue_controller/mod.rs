@@ -129,6 +129,7 @@ pub fn run() -> Result<()> {
         let backup = claude::setup_claude_settings(
             &project_dir,
             &args.model_url,
+            model_name,
             &project_dir_str,
             &job.project,
         )?;

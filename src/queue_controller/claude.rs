@@ -14,6 +14,7 @@ pub fn resolve_project_dir(project_root: &Path, project_name: &str) -> PathBuf {
 pub fn setup_claude_settings(
     project_dir: &Path,
     model_url: &str,
+    model_name: &str,
     mcp_cwd: &str,
     mcp_project: &str,
 ) -> Result<Option<PathBuf>> {
@@ -32,19 +33,13 @@ pub fn setup_claude_settings(
     };
 
     let settings = serde_json::json!({
-        "primaryModel": "queue-synth-model",
-        "provider": {
-            "id": "openai",
-            "config": {
-                "baseUrl": model_url,
-                "apiKey": "not-needed"
-            }
-        },
-        "models": {
-            "queue-synth-model": {
-                "provider": "openai",
-                "model": "queue-synth-model"
-            }
+        "modelProvider": "custom",
+        "customModel": {
+            "url": model_url,
+            "modelName": model_name,
+            "apiKey": "not-needed",
+            "modelCapabilities": ["completion"],
+            "provider": "openai"
         },
         "mcpServers": {
             "mcp_synth": {

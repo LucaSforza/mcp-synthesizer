@@ -165,9 +165,10 @@ pub struct TunnelHandle {
     child: Child,
 }
 
-/// Get compute node hostname for a Slurm job via squeue.
+/// Get compute node hostname for a Slurm job via squeue, fallback to sacct.
 pub fn get_job_node(cluster_host: &str, job_id: &str) -> Result<String> {
-    let output = Command::new("ssh")
+    // Try squeue first (active jobs).
+    let squeue = Command::new("ssh")
         .args([
             cluster_host,
             "squeue",
@@ -178,15 +179,39 @@ pub fn get_job_node(cluster_host: &str, job_id: &str) -> Result<String> {
             "%N",
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::null())
         .output()
-        .with_context(|| format!("failed to get node for job {job_id}"))?;
+        .context("failed to run squeue for node lookup")?;
+    let node = String::from_utf8_lossy(&squeue.stdout).trim().to_string();
+    if !node.is_empty() && node != "N/A" {
+        return Ok(node);
+    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() || stdout == "N/A" {
+    // Fallback to sacct (historical data for finished jobs).
+    let sacct = Command::new("ssh")
+        .args([
+            cluster_host,
+            "sacct",
+            "--job",
+            job_id,
+            "--noheader",
+            "--format",
+            "Node",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .context("failed to run sacct for node lookup")?;
+    let node = String::from_utf8_lossy(&sacct.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if node.is_empty() {
         bail!("could not determine compute node for job {job_id}");
     }
-    Ok(stdout)
+    Ok(node)
 }
 
 /// Convert node hostname to IP using convention: `node123` → `10.0.0.23`.
