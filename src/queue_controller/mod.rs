@@ -63,15 +63,15 @@ pub fn run() -> Result<()> {
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
 
     loop {
-        // 1. Pop highest-priority job.
-        let (member, score) = match qc.pop_job()? {
+        // 1. Peek highest-priority job (no removal).
+        let (member, score) = match qc.peek_job()? {
             Some(m) => m,
             None => {
                 eprintln!("[DEBUG] Queue empty. Exiting.");
                 return Ok(());
             }
         };
-        eprintln!("[DEBUG] Popped job '{member}' (priority={score})");
+        eprintln!("[DEBUG] Peeked job '{member}' (priority={score})");
 
         // 2. Parse member as "{model_name}:{job_id}".
         // Use rsplitn to handle model_name containing colons.
@@ -129,15 +129,18 @@ pub fn run() -> Result<()> {
 
         // 9. Launch Claude Code with synthesis prompt (blocking).
         eprintln!("[DEBUG] Launching Claude Code...");
-        let result = claude::launch_claude(&project_dir, &job.prompt);
+        let _result = claude::launch_claude(&project_dir, &job.prompt);
 
         // 10. Restore original settings.
         claude::restore_claude_settings(&project_dir, backup)?;
 
-        // 11. Handle result; fail-fast on error.
-        match result {
-            Ok(()) => eprintln!("[DEBUG] Synthesis completed for job {member}"),
-            Err(e) => bail!("synthesis failed for job {member}: {e}"),
+        // 11. Check synthesis result; remove from queue only on succeeded_full.
+        let succeeded = qc.check_succeeded_full(&job.project)?;
+        if succeeded {
+            qc.remove_job(&member)?;
+            eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+        } else {
+            bail!("synthesis not successful for {member}, job remains in queue");
         }
     }
 }
