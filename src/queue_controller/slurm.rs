@@ -120,7 +120,10 @@ pub fn poll_job(
                 bail!("job {job_id} timed out");
             }
             Some(other) => {
-                eprintln!("[DEBUG] Job {job_id} state: {other} (attempt {})", attempt + 1);
+                eprintln!(
+                    "[DEBUG] Job {job_id} state: {other} (attempt {})",
+                    attempt + 1
+                );
             }
             None => {
                 bail!("job {job_id} not found in squeue");
@@ -150,5 +153,9 @@ fn get_job_state(cluster_host: &str, job_id: &str) -> Result<Option<String>> {
         .with_context(|| format!("failed to run squeue for job {job_id}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() { Ok(None) } else { Ok(Some(stdout)) }
+    if stdout.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(stdout))
+    }
 }

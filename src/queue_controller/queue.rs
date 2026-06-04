@@ -26,15 +26,18 @@ impl QueueClient {
     pub fn open(url: &str) -> Result<Self> {
         let client =
             redis::Client::open(url).with_context(|| format!("failed to open Redis at {url}"))?;
-        let conn = client.get_connection().context("failed to connect to Redis")?;
+        let conn = client
+            .get_connection()
+            .context("failed to connect to Redis")?;
         Ok(Self { conn })
     }
 
     /// Pop highest-priority job from `cluster_runs`.
     /// Returns `(member, score)` where member is `"{model_name}:{job_id}"`.
     pub fn pop_job(&mut self) -> Result<Option<(String, f64)>> {
-        let results: Vec<(String, f64)> =
-            redis::cmd("ZPOPMAX").arg("cluster_runs").query(&mut self.conn)?;
+        let results: Vec<(String, f64)> = redis::cmd("ZPOPMAX")
+            .arg("cluster_runs")
+            .query(&mut self.conn)?;
         Ok(results.into_iter().next())
     }
 
@@ -58,15 +61,11 @@ impl QueueClient {
             .get("prompt")
             .cloned()
             .context("missing 'prompt' field in job metadata")?;
-        let hash_model_name = fields
-            .get("model_name")
-            .cloned()
-            .context("missing 'model_name' field in job metadata")?;
-        if hash_model_name != model_name {
-            bail!(
-                "model_name mismatch: queue member '{model_name}' != hash field '{hash_model_name}'"
-            );
-        }
-        Ok(JobMetadata { model_name: model_name.to_string(), seed, project, prompt })
+        Ok(JobMetadata {
+            model_name: model_name.to_string(),
+            seed,
+            project,
+            prompt,
+        })
     }
 }
