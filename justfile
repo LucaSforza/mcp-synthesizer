@@ -52,3 +52,8 @@ redis-down:
 test: redis-up
     TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
     podman-compose down
+
+# Build queue_controller binary only
+queue-controller:
+    cargo build --release --bin queue_controller --manifest-path "{{ root_dir }}/Cargo.toml"
+    echo "Binary: {{ root_dir }}/target/release/queue_controller"

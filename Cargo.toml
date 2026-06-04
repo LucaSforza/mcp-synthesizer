@@ -28,3 +28,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 [[bin]]
 name = "migrate"
 path = "src/bin/migrate_sqlite_to_redis.rs"
+
+[[bin]]
+name = "queue_controller"
+path = "src/bin/queue_controller.rs"
