@@ -89,11 +89,8 @@ pub fn run() -> Result<()> {
             job.model_name, job.project, job.seed,
         );
 
-        // 4. Construct model path; validate it exists.
+        // 4. Construct model path (used in sbatch on the cluster).
         let model_path = args.models_path.join(&job.model_name);
-        if !model_path.exists() {
-            bail!("model file not found: {model_path:?}");
-        }
         eprintln!("[DEBUG] Model path: {model_path:?}");
 
         // 5. Generate and submit sbatch via SSH.

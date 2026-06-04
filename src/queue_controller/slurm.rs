@@ -22,8 +22,7 @@ pub fn generate_sbatch(model_path: &Path, seed: &str) -> String {
 #SBATCH --output=synth-%j.out
 #SBATCH --error=synth-%j.err
 #SBATCH --gpus=1
-#SBATCH --time=04:00:00
-#SBATCH --mem=32G
+#SBATCH --mem=41G
 
 llama-server \
     --model {model_path} \
