@@ -57,3 +57,8 @@ test: redis-up
 queue-controller:
     cargo build --release --bin queue_controller --manifest-path "{{ root_dir }}/Cargo.toml"
     echo "Binary: {{ root_dir }}/target/release/queue_controller"
+
+# Build populate_queue binary only
+populate-queue:
+    cargo build --release --bin populate_queue --manifest-path "{{ root_dir }}/Cargo.toml"
+    echo "Binary: {{ root_dir }}/target/release/populate_queue"

@@ -63,6 +63,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 | `mcp_synth` | `src/main.rs` | MCP server for Solidity synthesis |
 | `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |
 | `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
+| `populate_queue` | `src/bin/populate_queue.rs` | Batch enqueue synthesis jobs into Redis |
 
 **MCP Inspector:** `npx @modelcontextprotocol/inspector --transport stdio -- cargo run -- --cwd /tmp --project test`
 
@@ -76,6 +77,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 just build            # or: just b  — builds with LLD if available
 just install          # or: just i  — copies mcp_synth to ~/.local/bin/
 just queue-controller # build queue_controller binary only
+just populate-queue   # build populate_queue binary only
 just redis-up         # start Redis via docker compose
 just test             # redis-up + cargo test -- --test-threads 1 + redis-down
 ```
@@ -244,6 +246,24 @@ queue_controller \
 
 Strict fail-fast: any error (Redis conn, missing model, sbatch fail, Slurm FAILED/CANCELLED/TIMEOUT, Claude Code non-zero) terminates immediately. No retries.
 
+### `src/bin/populate_queue.rs` — Batch synthesis job enqueuer
+
+Generates N synthesis jobs via deterministic RNG and enqueues them into Redis for the queue controller. One command replaces manual per-job creation.
+
+```bash
+populate_queue \
+    --model qwen3-solidity-27B-Q6_K.gguf \
+    --seed 42 \
+    --project my-project \
+    --prompt-file prompt.md \
+    --iterations 100 \
+    [--redis-url redis://localhost:6379]
+```
+
+**Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash (seed, project, prompt, model_name) → ZADD `cluster_runs` with priority = iteration index.
+
+Validation upfront: model/project non-empty, prompt file exists and non-empty, iterations > 0.
+
 ## Key Patterns
 
 - `rmcp` `#[tool(description, annotations(...))]` on `impl` blocks with `#[tool_router(server_handler)]`
@@ -267,4 +287,5 @@ Strict fail-fast: any error (Redis conn, missing model, sbatch fail, Slurm FAILE
 - `redis` — Redis client (pure Rust, no system dep)
 - `chrono` — ISO 8601 timestamps for created_at
 - `rusqlite` — SQLite, `bundled` feature embeds libsqlite3 (unconditional)
+- `rand_chacha`/`rand_core` — deterministic RNG for `populate_queue` seed generation
 - `tempfile` — temp DBs in tests (dev-dependency only)
