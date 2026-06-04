@@ -95,7 +95,6 @@ fn run() -> Result<u32> {
             ("seed", &generated_seed.to_string()),
             ("project", &args.project),
             ("prompt", &prompt),
-            ("model_name", &args.model),
         ];
         redis::cmd("HSET")
             .arg(&job_key)

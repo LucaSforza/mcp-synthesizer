@@ -42,7 +42,7 @@ impl QueueClient {
     }
 
     /// Load job metadata from Redis hash `{model_name}:{job_id}`.
-    /// Validates all required fields exist and model_name matches.
+    /// Validates all required fields exist.
     pub fn load_job(&mut self, model_name: &str, job_id: i64) -> Result<JobMetadata> {
         let key = format!("{model_name}:{job_id}");
         let fields: HashMap<String, String> = self.conn.hgetall(&key)?;
