@@ -86,7 +86,7 @@ pub fn run() -> Result<()> {
         let job_id: i64 = job_id_str
             .parse()
             .context("job_id is not a valid integer")?;
-        let member_slug = member.replace(":", "-");
+        let _member_slug = member.replace(":", "-");
 
         // 3. Load + validate job metadata.
         let job = qc.load_job(model_name, job_id)?;
@@ -133,26 +133,18 @@ pub fn run() -> Result<()> {
             &job.project,
         )?;
 
-        // 9. Launch Claude Code with synthesis prompt (blocking).
+        // 9. Launch Claude Code with synthesis prompt (blocking),
+        //    pipe through jq, save to {model_name}_{job_id}.json.
         eprintln!("[DEBUG] Launching Claude Code...");
-        let claude_result = claude::launch_claude(&project_dir, &job.prompt);
+        let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
+        let claude_result = claude::launch_claude(&project_dir, &job.prompt, &output_path);
 
         // 10. Restore original settings regardless of outcome.
         claude::restore_claude_settings(&project_dir, backup)?;
 
         // 11. If Claude Code itself failed, bail immediately.
-        let claude_output = match claude_result {
-            Ok(out) => out,
-            Err(e) => bail!("synthesis failed for job {member}: {e}"),
-        };
-
-        // 12. Save formatted JSON output to project directory.
-        let output_path = project_dir.join(format!("synthesis-{member_slug}.json"));
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&claude_output) {
-            let formatted = serde_json::to_string_pretty(&parsed)?;
-            std::fs::write(&output_path, formatted)?;
-        } else {
-            std::fs::write(&output_path, &claude_output)?;
+        if let Err(e) = claude_result {
+            bail!("synthesis failed for job {member}: {e}");
         }
         eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
 

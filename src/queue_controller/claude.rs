@@ -82,10 +82,16 @@ pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> R
     Ok(())
 }
 
+use std::io::Write;
+
 /// Launch Claude Code with prompt in project directory (blocking).
-/// Returns the JSON output from Claude Code.
-pub fn launch_claude(project_dir: &Path, prompt: &str) -> Result<String> {
-    let output = Command::new("claude")
+/// Pipes output through `jq` for formatting, writes to `output_path`.
+pub fn launch_claude(project_dir: &Path, prompt: &str, output_path: &Path) -> Result<()> {
+    let file = std::fs::File::create(output_path)
+        .with_context(|| format!("failed to create output file {output_path:?}"))?;
+
+    // Run claude -p --output-format json and capture stdout.
+    let claude = Command::new("claude")
         .args(["-p", "--output-format", "json", prompt])
         .current_dir(project_dir)
         .stdin(Stdio::inherit())
@@ -94,12 +100,27 @@ pub fn launch_claude(project_dir: &Path, prompt: &str) -> Result<String> {
         .output()
         .context("failed to launch Claude Code")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("Claude Code exited with status {}: {stderr}", output.status);
+    if !claude.status.success() {
+        let stderr = String::from_utf8_lossy(&claude.stderr);
+        bail!("Claude Code exited with status {}: {stderr}", claude.status);
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Claude Code output was not valid UTF-8")?;
-    Ok(stdout)
+    // Pipe through jq for pretty formatting.
+    let mut jq = Command::new("jq")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(file))
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("failed to spawn jq")?;
+
+    if let Some(ref mut stdin) = jq.stdin {
+        stdin.write_all(&claude.stdout)?;
+    }
+    drop(jq.stdin.take());
+
+    let jq_status = jq.wait()?;
+    if !jq_status.success() {
+        bail!("jq formatting failed with status {jq_status}");
+    }
+    Ok(())
 }
