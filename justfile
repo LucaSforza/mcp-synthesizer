@@ -40,15 +40,15 @@ install: build
 
     echo "INSTALL COMPLETE!"
 
-# Start Redis via docker compose
+# Start Redis via podman compose
 redis-up:
-    docker compose up -d
+    podman-compose up -d
 
 # Stop Redis
 redis-down:
-    docker compose down
+    podman-compose down
 
 # Run full tests with Redis (single-threaded to avoid FLUSHALL interference)
 test: redis-up
     TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
-    docker compose down
+    podman-compose down

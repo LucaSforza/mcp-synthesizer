@@ -2,6 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: mcp-synth-redis
+    command: ["redis-server", "--save", "300 1", "--save", "60 10"]
     ports:
       - "6379:6379"
     volumes:
