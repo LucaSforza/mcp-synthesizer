@@ -8,8 +8,8 @@ use std::thread::sleep;
 use std::time::Duration;
 
 /// Generate sbatch script content.
-/// Only MODEL_PATH and SEED are parameterized; everything else hardcoded.
-pub fn generate_sbatch(model_path: &Path, seed: &str) -> String {
+/// Only MODEL_PATH, LLAMA_PATH and SEED are parameterized; everything else hardcoded.
+pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str) -> String {
     let model_path_str = model_path.to_string_lossy();
     let model_slug = model_path
         .file_stem()
@@ -24,7 +24,7 @@ pub fn generate_sbatch(model_path: &Path, seed: &str) -> String {
 #SBATCH --gpus=1
 #SBATCH --mem=41G
 
-llama-server \
+{llama_path} \
     --model {model_path} \
     --seed {seed} \
     --models-max 1 \
@@ -44,6 +44,7 @@ llama-server \
 "#,
         model_slug = model_slug,
         model_path = model_path_str,
+        llama_path = llama_path,
         seed = seed,
     )
 }

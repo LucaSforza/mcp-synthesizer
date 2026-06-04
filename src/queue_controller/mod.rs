@@ -50,6 +50,11 @@ pub struct Args {
     /// Port for SSH tunnel to reach the model server on the cluster.
     #[arg(long, default_value_t = 8080)]
     pub tunnel_port: u16,
+
+    /// Path to llama-server executable on the cluster.
+    // TODO: remove hardcoded default — make configurable through Redis job metadata.
+    #[arg(long, default_value = "/home/sforza_2050030/.local/bin/llama-server")]
+    pub llama_path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +99,7 @@ pub fn run() -> Result<()> {
         eprintln!("[DEBUG] Model path: {model_path:?}");
 
         // 5. Generate and submit sbatch via SSH.
-        let sbatch = slurm::generate_sbatch(&model_path, &job.seed);
+        let sbatch = slurm::generate_sbatch(&model_path, &args.llama_path, &job.seed);
         let slurm_job_id = slurm::submit_sbatch(&args.cluster_host, &sbatch)?;
         eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
 
