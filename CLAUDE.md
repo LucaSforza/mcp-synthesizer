@@ -56,7 +56,13 @@ cargo run -- --cwd . --project test --db-type sqlite
 `--db-type` (default `redis`), `--redis-url` (default `redis://localhost:6379`),
 `--db-path` (used with `--db-type sqlite`)
 
-**Package:** `mcp_synth` (Cargo.toml name). Binary output: `mcp_synth`.
+**Package:** `mcp_synth` (Cargo.toml name). Three binaries:
+
+| Binary | Path | Purpose |
+|--------|------|---------|
+| `mcp_synth` | `src/main.rs` | MCP server for Solidity synthesis |
+| `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |
+| `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
 
 **MCP Inspector:** `npx @modelcontextprotocol/inspector --transport stdio -- cargo run -- --cwd /tmp --project test`
 
@@ -67,10 +73,11 @@ cargo run -- --cwd . --project test --db-type sqlite
 ## Build & Install (justfile)
 
 ```bash
-just build     # or: just b  — builds with LLD if available
-just install   # or: just i  — copies mcp_synth to ~/.local/bin/
-just redis-up  # start Redis via docker compose
-just test      # redis-up + cargo test -- --test-threads 1 + redis-down
+just build            # or: just b  — builds with LLD if available
+just install          # or: just i  — copies mcp_synth to ~/.local/bin/
+just queue-controller # build queue_controller binary only
+just redis-up         # start Redis via docker compose
+just test             # redis-up + cargo test -- --test-threads 1 + redis-down
 ```
 
 `just install` uses md5sum to skip copy if binary unchanged.
@@ -202,6 +209,40 @@ Standalone binary:
 ```bash
 cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:6379
 ```
+
+### `src/bin/queue_controller.rs` — Automated Slurm synthesis executor
+
+Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model serving, launches Claude Code with MCP integration. Processes sequentially until queue empty.
+
+**Queue Redis schema:**
+
+```
+cluster_runs                                         -> Sorted Set (member="{model}:{job_id}", score=priority)
+{model_name}:{job_id}                                -> Hash { seed, project, prompt, model_name }
+```
+
+**Processing loop:**
+1. ZPOPMAX `cluster_runs` → empty → exit 0
+2. Parse `{model}:{id}`, HGETALL job hash → validate fields
+3. Construct model path, generate sbatch (MODEL_PATH + SEED parameterized)
+4. `ssh cluster "sbatch"` via stdin pipe → capture job ID
+5. Poll `squeue --format %T` until RUNNING (default 30s interval, 30m timeout)
+6. Generate `.claude/settings.json` with MCP server + model provider (backup existing)
+7. `claude --prompt "..." --cd {project_dir}` — blocking
+8. Restore original settings, repeat
+
+```bash
+queue_controller \
+    --models-path ~/dll/llm/models \
+    --project-root ~/dll/projects \
+    [--redis-url redis://localhost:6379] \
+    [--model-url http://127.0.0.1:8080/v1] \
+    [--cluster-host cluster] \
+    [--poll-interval 30] \
+    [--poll-timeout 1800]
+```
+
+Strict fail-fast: any error (Redis conn, missing model, sbatch fail, Slurm FAILED/CANCELLED/TIMEOUT, Claude Code non-zero) terminates immediately. No retries.
 
 ## Key Patterns
 
