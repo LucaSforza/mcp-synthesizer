@@ -86,14 +86,8 @@ pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> R
 /// Returns the JSON output from Claude Code.
 pub fn launch_claude(project_dir: &Path, prompt: &str) -> Result<String> {
     let output = Command::new("claude")
-        .args([
-            "-p",
-            "--output-format",
-            "json",
-            "--cd",
-            &project_dir.to_string_lossy(),
-            prompt,
-        ])
+        .args(["-p", "--output-format", "json", prompt])
+        .current_dir(project_dir)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
