@@ -86,6 +86,7 @@ pub fn run() -> Result<()> {
         let job_id: i64 = job_id_str
             .parse()
             .context("job_id is not a valid integer")?;
+        let member_slug = member.replace(":", "-");
 
         // 3. Load + validate job metadata.
         let job = qc.load_job(model_name, job_id)?;
@@ -134,12 +135,28 @@ pub fn run() -> Result<()> {
 
         // 9. Launch Claude Code with synthesis prompt (blocking).
         eprintln!("[DEBUG] Launching Claude Code...");
-        let _result = claude::launch_claude(&project_dir, &job.prompt);
+        let claude_result = claude::launch_claude(&project_dir, &job.prompt);
 
-        // 10. Restore original settings.
+        // 10. Restore original settings regardless of outcome.
         claude::restore_claude_settings(&project_dir, backup)?;
 
-        // 11. Check synthesis result; remove from queue only on succeeded_full.
+        // 11. If Claude Code itself failed, bail immediately.
+        let claude_output = match claude_result {
+            Ok(out) => out,
+            Err(e) => bail!("synthesis failed for job {member}: {e}"),
+        };
+
+        // 12. Save formatted JSON output to project directory.
+        let output_path = project_dir.join(format!("synthesis-{member_slug}.json"));
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&claude_output) {
+            let formatted = serde_json::to_string_pretty(&parsed)?;
+            std::fs::write(&output_path, formatted)?;
+        } else {
+            std::fs::write(&output_path, &claude_output)?;
+        }
+        eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
+
+        // 12. Check synthesis result; remove from queue only on succeeded_full.
         let succeeded = qc.check_succeeded_full(&job.project)?;
         if succeeded {
             qc.remove_job(&member)?;

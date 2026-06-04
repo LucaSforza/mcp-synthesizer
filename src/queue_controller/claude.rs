@@ -83,17 +83,29 @@ pub fn restore_claude_settings(project_dir: &Path, backup: Option<PathBuf>) -> R
 }
 
 /// Launch Claude Code with prompt in project directory (blocking).
-pub fn launch_claude(project_dir: &Path, prompt: &str) -> Result<()> {
-    let status = Command::new("claude")
-        .args(["--prompt", prompt, "--cd", &project_dir.to_string_lossy()])
+/// Returns the JSON output from Claude Code.
+pub fn launch_claude(project_dir: &Path, prompt: &str) -> Result<String> {
+    let output = Command::new("claude")
+        .args([
+            "-p",
+            "--output-format",
+            "json",
+            "--cd",
+            &project_dir.to_string_lossy(),
+            prompt,
+        ])
         .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .status()
+        .output()
         .context("failed to launch Claude Code")?;
 
-    if !status.success() {
-        bail!("Claude Code exited with status {}", status);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Claude Code exited with status {}: {stderr}", output.status);
     }
-    Ok(())
+
+    let stdout = String::from_utf8(output.stdout)
+        .context("Claude Code output was not valid UTF-8")?;
+    Ok(stdout)
 }
