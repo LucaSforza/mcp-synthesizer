@@ -175,21 +175,28 @@ queue_controller \
 | `--redis-url` | Redis URL | `redis://localhost:6379` |
 | `--model-url` | OpenAI-compatible endpoint | `http://127.0.0.1:8080/v1` |
 | `--cluster-host` | SSH hostname for Slurm | `cluster` |
+| `--llama-path` | llama-server path on cluster | `/home/sforza_2050030/.local/bin/llama-server` |
+| `--tunnel-port` | Port for SSH tunnel | `8080` |
 | `--poll-interval` | Slurm status poll interval (s) | `30` |
 | `--poll-timeout` | Max wait for RUNNING state (s) | `1800` |
 
 ### Processing Loop
 
-1. ZPOPMAX `cluster_runs` → empty → exit 0
+1. `ZREVRANGE cluster_runs 0 0 WITHSCORES` → peek (no removal)
 2. Parse `{model}:{id}`, HGETALL job hash, validate fields
-3. Construct model path, generate sbatch (MODEL_PATH + SEED parameterized)
+3. Construct model path, generate sbatch (MODEL_PATH + LLAMA_PATH + SEED)
 4. `ssh cluster "sbatch"` via stdin → capture Slurm job ID
-5. Poll `squeue --format %T` until RUNNING (default 30s interval, 30m timeout)
-6. Generate `.claude/settings.json` with MCP server + model provider (backup existing)
-7. `claude --prompt "..." --cd {project_dir}` — blocking
-8. Restore original settings, repeat
+5. Poll `squeue --format %T` until RUNNING (sacct fallback for finished jobs)
+6. `squeue --format %N` → compute node → `node_name_to_ip` (last 2 digits: node123 → `10.0.0.23`)
+7. `ssh -L port:node_ip:port cluster -N` → tunnel (auto-killed on Drop)
+8. Inject `mcpServers` into `.claude/settings.local.json` (preserves hooks, env, permissions)
+9. `claude -p --output-format json --mcp-config mcp_config.json --strict-mcp-config "prompt"`
+   - Overrides `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` env vars
+   - Pipes output through `jq`, saves as `{model}_{id}.json`
+10. Restore original `.settings.local.json` from backup
+11. Check `check_succeeded_full()`: true → ZREM (job consumed); false → bail (job stays in queue)
 
-Fail-fast on any error. No retries.
+Fail-fast on any error. Job stays in queue on failure. No retries.
 
 ---
 
@@ -277,7 +284,7 @@ synthesis_trial:gas:by_project:{project_id}         Sorted Set (member=trial_id,
 
 ```
 cluster_runs                                        Sorted Set (member="{model}:{id}", score=priority)
-{model_name}:{job_id}                               Hash { seed, project, prompt, model_name }
+{model_name}:{job_id}                               Hash { seed, project, prompt }
 ```
 
 ### SQLite Schema

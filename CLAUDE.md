@@ -56,7 +56,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 `--db-type` (default `redis`), `--redis-url` (default `redis://localhost:6379`),
 `--db-path` (used with `--db-type sqlite`)
 
-**Package:** `mcp_synth` (Cargo.toml name). Three binaries:
+**Package:** `mcp_synth` (Cargo.toml name). Four binaries:
 
 | Binary | Path | Purpose |
 |--------|------|---------|
@@ -220,18 +220,23 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 
 ```
 cluster_runs                                         -> Sorted Set (member="{model}:{job_id}", score=priority)
-{model_name}:{job_id}                                -> Hash { seed, project, prompt, model_name }
+{model_name}:{job_id}                                -> Hash { seed, project, prompt }
 ```
 
 **Processing loop:**
-1. ZPOPMAX `cluster_runs` → empty → exit 0
+1. `ZREVRANGE cluster_runs 0 0 WITHSCORES` → peek (no removal)
 2. Parse `{model}:{id}`, HGETALL job hash → validate fields
-3. Construct model path, generate sbatch (MODEL_PATH + SEED parameterized)
+3. Construct model path, generate sbatch (MODEL_PATH + LLAMA_PATH + SEED)
 4. `ssh cluster "sbatch"` via stdin pipe → capture job ID
-5. Poll `squeue --format %T` until RUNNING (default 30s interval, 30m timeout)
-6. Generate `.claude/settings.json` with MCP server + model provider (backup existing)
-7. `claude --prompt "..." --cd {project_dir}` — blocking
-8. Restore original settings, repeat
+5. Poll `squeue --format %T` until RUNNING (sacct fallback for finished jobs)
+6. `squeue --format %N` → get compute node hostname → `node_name_to_ip` (last 2 digits)
+7. `ssh -L port:node_ip:port cluster -N` → SSH tunnel (auto-closed on Drop)
+8. Injects `mcpServers` into `.claude/settings.local.json` (preserves existing config)
+9. `claude -p --output-format json --mcp-config mcp_config.json --strict-mcp-config "prompt"` → blocking
+   - Overrides `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` env vars
+   - Captures output, pipes through `jq`, saves as `{model}_{id}.json`
+10. Restore original settings.local.json from backup
+11. `check_succeeded_full()` → if true, ZREM removes job from queue; if false, bail (job stays)
 
 ```bash
 queue_controller \
@@ -240,11 +245,13 @@ queue_controller \
     [--redis-url redis://localhost:6379] \
     [--model-url http://127.0.0.1:8080/v1] \
     [--cluster-host cluster] \
+    [--llama-path /home/sforza_2050030/.local/bin/llama-server] \
+    [--tunnel-port 8080] \
     [--poll-interval 30] \
     [--poll-timeout 1800]
 ```
 
-Strict fail-fast: any error (Redis conn, missing model, sbatch fail, Slurm FAILED/CANCELLED/TIMEOUT, Claude Code non-zero) terminates immediately. No retries.
+Strict fail-fast: any error (Redis conn, sbatch fail, Slurm FAILED, Claude Code non-zero, trial not succeeded_full) terminates immediately. Job stays in queue on failure.
 
 ### `src/bin/populate_queue.rs` — Batch synthesis job enqueuer
 
@@ -260,7 +267,7 @@ populate_queue \
     [--redis-url redis://localhost:6379]
 ```
 
-**Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash (seed, project, prompt, model_name) → ZADD `cluster_runs` with priority = iteration index.
+**Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash (seed, project, prompt) → ZADD `cluster_runs` with priority = iteration index. Model name is in the key, not duplicated in hash.
 
 Validation upfront: model/project non-empty, prompt file exists and non-empty, iterations > 0.
 
