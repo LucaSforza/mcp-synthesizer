@@ -33,6 +33,29 @@ struct CleanupState {
 
 static CLEANUP: Mutex<Option<CleanupState>> = Mutex::new(None);
 
+// ---------------------------------------------------------------------------
+// Per-job debug prefix
+// ---------------------------------------------------------------------------
+
+/// Set by the main loop to tag every debug line with the current job.
+/// Format: `[job:model_name:job_id]`.
+static JOB_PREFIX: Mutex<String> = Mutex::new(String::new());
+
+/// Like `eprintln!` but prepends `[job:model:id]` from `JOB_PREFIX` if set.
+macro_rules! debug_log {
+    ($($arg:tt)*) => {{
+        let _guard = JOB_PREFIX.lock().unwrap();
+        if !_guard.is_empty() {
+            eprint!("{} ", _guard);
+        }
+        eprintln!($($arg)*);
+    }};
+}
+
+// ---------------------------------------------------------------------------
+// Cleanup helpers
+// ---------------------------------------------------------------------------
+
 fn with_cleanup<F>(f: F)
 where
     F: FnOnce(&mut CleanupState),
@@ -66,13 +89,12 @@ fn do_cleanup(state: &CleanupState) {
         let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
         eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
     }
-
 }
 
 /// Drop guard: runs cleanup on any remaining state when `run()` exits.
 struct CleanupGuard;
 
-/// Run pending cleanup actions, then reset all per-iteration fields to `None`
+/// Run pending cleanup actions, reset per-iteration state, and clear job prefix
 /// so the next loop iteration starts with clean state.
 fn cleanup_and_reset(state: &mut CleanupState) {
     do_cleanup(state);
@@ -81,6 +103,7 @@ fn cleanup_and_reset(state: &mut CleanupState) {
     state.settings_backup = None;
     state.claude_child_pid = None;
     state.orig_branch = None;
+    *JOB_PREFIX.lock().unwrap() = String::new();
 }
 
 impl Drop for CleanupGuard {
@@ -196,13 +219,13 @@ fn submit_slurm_job(
     llama_path: &str,
     seed: &str,
 ) -> Result<String> {
-    eprintln!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
+    debug_log!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
     let model_path = models_path.join(model_name);
-    eprintln!("[DEBUG] Model path: {model_path:?}");
+    debug_log!("[DEBUG] Model path: {model_path:?}");
 
     let sbatch = slurm::generate_sbatch(&model_path, llama_path, seed);
     let slurm_job_id = slurm::submit_sbatch(cluster_host, &sbatch)?;
-    eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
+    debug_log!("[DEBUG] Submitted Slurm job {slurm_job_id}");
     Ok(slurm_job_id)
 }
 
@@ -218,7 +241,7 @@ fn wait_and_create_tunnel(
     poll_timeout: u64,
     tunnel_port: u16,
 ) -> Result<slurm::TunnelHandle> {
-    eprintln!(
+    debug_log!(
         "[DEBUG] [Step 6] wait_and_create_tunnel — poll job status, resolve node IP, establish SSH tunnel"
     );
     slurm::poll_job(cluster_host, slurm_job_id, poll_interval, poll_timeout)?;
@@ -234,27 +257,27 @@ fn prepare_project_environment(
     project_root: &Path,
     project_name: &str,
 ) -> Result<(PathBuf, String)> {
-    eprintln!(
+    debug_log!(
         "[DEBUG] [Step 7+7b] prepare_project_environment — resolve project dir, read prompt.md"
     );
     let project_dir = claude::resolve_project_dir(project_root, project_name);
     if !project_dir.exists() {
         bail!("project directory not found: {project_dir:?}");
     }
-    eprintln!("[DEBUG] Project dir: {project_dir:?}");
+    debug_log!("[DEBUG] Project dir: {project_dir:?}");
 
     let system_prompt_path = project_dir.join("prompt.md");
     let system_prompt = if system_prompt_path.exists() {
         std::fs::read_to_string(&system_prompt_path)
             .with_context(|| format!("failed to read {system_prompt_path:?}"))?
     } else {
-        eprintln!(
+        debug_log!(
             "[WARN] No prompt.md found at {system_prompt_path:?}, \
              --append-system-prompt omitted"
         );
         String::new()
     };
-    eprintln!(
+    debug_log!(
         "[DEBUG] System prompt (prompt.md): {} bytes",
         system_prompt.len()
     );
@@ -276,7 +299,7 @@ fn setup_claude_and_git(
     seed: u64,
     iteration: u64,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
-    eprintln!(
+    debug_log!(
         "[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch"
     );
     // Step 8: inject MCP settings (backup existing).
@@ -321,9 +344,9 @@ fn run_claude_code(
     model_name: &str,
     job_id_str: &str,
 ) -> Result<(std::process::Child, PathBuf)> {
-    eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
+    debug_log!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
-    eprintln!("[DEBUG] Launching Claude Code...");
+    debug_log!("[DEBUG] Launching Claude Code...");
     let output_path = project_dir.join(format!("{}_{}.jsonl", model_name, job_id_str));
     let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, model_name)?;
     Ok((child, output_path))
@@ -336,7 +359,7 @@ fn cleanup_environment(
     backup: Option<PathBuf>,
     cluster_host: &str,
 ) -> Result<()> {
-    eprintln!(
+    debug_log!(
         "[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job"
     );
     // Step 10: restore settings.
@@ -354,7 +377,7 @@ fn cleanup_environment(
     if let Some(ref job_id) = slurm_job_id {
         slurm::cancel_job(cluster_host, job_id);
     } else {
-        eprintln!("[WARN] no slurm job id to cancel");
+        debug_log!("[WARN] no slurm job id to cancel");
     }
 
     Ok(())
@@ -371,11 +394,11 @@ fn check_claude_result(
     project_name: &str,
     member: &str,
 ) -> Result<()> {
-    eprintln!("[DEBUG] [Step 11] check_claude_result — verify exit status + succeeded_full");
+    debug_log!("[DEBUG] [Step 11] check_claude_result — verify exit status + succeeded_full");
     if !claude_status.success() {
         bail!("Claude Code exited with status {claude_status}");
     }
-    eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
+    debug_log!("[DEBUG] Saved synthesis output to {output_path:?}");
 
     if !qc.check_succeeded_full(project_name)? {
         bail!("synthesis not successful for {member}, job remains in queue");
@@ -386,9 +409,9 @@ fn check_claude_result(
 
 /// Step 12: Remove successfully completed job from Redis queue.
 fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()> {
-    eprintln!("[DEBUG] [Step 12] remove_job_from_queue — synthesis succeeded");
+    debug_log!("[DEBUG] [Step 12] remove_job_from_queue — synthesis succeeded");
     qc.remove_job(member)?;
-    eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+    debug_log!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
     Ok(())
 }
 
@@ -397,14 +420,16 @@ fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()
 ///
 /// All errors are non-fatal (logged as WARN).
 fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &str) {
-    eprintln!(
+    debug_log!(
         "[DEBUG] [Step 13] persist_usage_to_redis — parse Claude Code output, write usage to Redis"
     );
     match synthesis_usage::parse_output_file(output_path) {
         Ok(usage) => {
-            eprintln!(
+            debug_log!(
                 "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
-                usage.input_tokens, usage.output_tokens, usage.cost_usd,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cost_usd,
             );
             match redis::Client::open(redis_url).and_then(|c| c.get_connection()) {
                 Ok(mut usage_conn) => {
@@ -413,13 +438,13 @@ fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &st
                         project_name,
                         &usage,
                     ) {
-                        eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
+                        debug_log!("[WARN] Failed to write usage to test_run: {e:#}");
                     }
                 }
-                Err(e) => eprintln!("[WARN] Failed to connect to Redis for usage write: {e:#}"),
+                Err(e) => debug_log!("[WARN] Failed to connect to Redis for usage write: {e:#}"),
             }
         }
-        Err(e) => eprintln!(
+        Err(e) => debug_log!(
             "[WARN] Failed to parse usage from {}: {e:#}",
             output_path.display(),
         ),
@@ -437,7 +462,7 @@ fn push_synthesis_to_git(
     orig_branch: &str,
     branch_name: &str,
 ) -> Result<()> {
-    eprintln!("[DEBUG] [Step 14] push_synthesis_to_git — commit, push, restore branch");
+    debug_log!("[DEBUG] [Step 14] push_synthesis_to_git — commit, push, restore branch");
     let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.to_path_buf());
     let commit_message = format!("Synthesis: {model_name} iteration {iteration} seed {seed}");
     let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
@@ -497,9 +522,22 @@ pub fn run() -> Result<()> {
         let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
         let iteration = job_id as u64;
 
+        // Set per-job debug prefix for all subsequent debug_log calls.
+        *JOB_PREFIX.lock().unwrap() = format!("[job:{}:{}]", model_name, job_id_str);
+
         // ------------------------------------------------------------------
         // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
         // ------------------------------------------------------------------
+        eprintln!(
+            "\n{}",
+            "=".repeat(80)
+        );
+        eprintln!(
+            "===== Job {}:{} (seed {}, iteration {}) =====",
+            model_name, job_id_str, seed, iteration,
+        );
+        eprintln!("{}", "=".repeat(80));
+
         let slurm_job_id = submit_slurm_job(
             &args.cluster_host,
             &args.models_path,
@@ -548,11 +586,6 @@ pub fn run() -> Result<()> {
 
         let claude_status = claude_child
             .wait()
-            // TODO: Invece di mettere un wait, bisogna far
-            // entrare il controller in un pooling. Da un lato
-            // nel pooling controlliamo se il job claude sia
-            // finito, e poi controlliamo che nel cluster vada
-            // tutto bene. Gestire poi i diversi casi.
             .context("failed to wait for Claude Code")?;
         with_cleanup(|s| s.claude_child_pid = None);
 
@@ -587,7 +620,9 @@ pub fn run() -> Result<()> {
             with_cleanup(|s| s.orig_branch = None);
         }
 
-        // Reset per-iteration state for next job.
+        eprintln!("===== End job {}:{} =====\n", model_name, job_id_str);
+
+        // Reset per-iteration state and job prefix for next job.
         if let Ok(mut guard) = CLEANUP.lock()
             && let Some(ref mut state) = *guard
         {
