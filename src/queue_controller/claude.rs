@@ -144,6 +144,7 @@ pub fn spawn_claude(
     let child = Command::new("claude")
         .args(&args)
         .current_dir(project_dir)
+        .env("CAVEMAN_DEFAULT_MODE", "wenyan")
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")
         .env("ANTHROPIC_MODEL", model_name)
         .stdin(Stdio::inherit())
