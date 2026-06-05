@@ -254,11 +254,14 @@ cluster_runs                                         -> Sorted Set (member="{mod
 6. `squeue --format %N` → get compute node hostname → `node_name_to_ip` (last 2 digits)
 7. `ssh -L port:node_ip:port cluster -N` → SSH tunnel (auto-closed on Drop)
 8. Injects `mcpServers` into `.claude/settings.local.json` (preserves existing config)
+8b. Create synthesis branch from HEAD and checkout (`git2` + `auth-git2`, only if `--git-ssh-key` provided)
 9. `claude -p --output-format stream-json --mcp-config mcp_config.json --strict-mcp-config "prompt"` → blocking
    - Overrides `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` env vars
    - Captures output, saves as `{model}_{id}.json`
 10. Restore original settings.local.json from backup
+10b. Cancel Slurm job (model server no longer needed)
 11. `check_succeeded_full()` → if true, ZREM removes job from queue; if false, bail (job stays)
+12. `commit_and_push()` — stage all changes, commit, push to origin, restore original branch (only if `--git-ssh-key` provided)
 
 **Signal handling:** Registers for SIGINT and SIGTERM via `signal-hook`. On signal: kill claude child → scancel Slurm job → restore settings → exit. Cleanup state (`CleanupState` struct in `static Mutex`) populated incrementally as steps progress.
 
@@ -272,7 +275,8 @@ queue_controller \
     [--llama-path /home/sforza_2050030/.local/bin/llama-server] \
     [--tunnel-port 8080] \
     [--poll-interval 30] \
-    [--poll-timeout 1800]
+    [--poll-timeout 1800] \
+    [--git-ssh-key ~/.ssh/id_ed25519]
 ```
 
 **`--project-root`** must point to local dir containing project subdirs (e.g. `test2/`). Model is on cluster — `--models-path` is the cluster-side path embedded in sbatch script.
@@ -310,6 +314,8 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
 - `eprintln!` debug logging with `[DEBUG]` prefix throughout
 - `signal-hook::iterator::Signals` for SIGINT/SIGTERM handling in a dedicated thread (self-pipe mechanism)
+- `auth-git2::GitAuthenticator` for deterministic SSH key authentication (no ssh-agent)
+- Two-phase Git API: `checkout_synthesis_branch()` before Claude Code, `commit_and_push()` after success
 - `static Mutex<Option<CleanupState>>` for graceful shutdown state shared between main loop and signal handler
 - Edition 2024, musl target for static linking
 
@@ -324,4 +330,5 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `rusqlite` — SQLite, `bundled` feature embeds libsqlite3 (unconditional)
 - `rand_chacha`/`rand_core` — deterministic RNG for `populate_queue` seed generation
 - `signal-hook` — SIGINT/SIGTERM handling for queue_controller graceful shutdown
+- `git2`/`auth-git2` — Git persistence (branch, commit, push) for synthesis results
 - `tempfile` — temp DBs in tests (dev-dependency only)

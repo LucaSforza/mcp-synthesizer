@@ -179,6 +179,7 @@ queue_controller \
 | `--tunnel-port` | Port for SSH tunnel | `8080` |
 | `--poll-interval` | Slurm status poll interval (s) | `30` |
 | `--poll-timeout` | Max wait for RUNNING state (s) | `1800` |
+| `--git-ssh-key` | SSH private key for git push (optional) | — |
 
 ### Processing Loop
 
@@ -190,11 +191,14 @@ queue_controller \
 6. `squeue --format %N` → compute node → `node_name_to_ip` (last 2 digits: node123 → `10.0.0.23`)
 7. `ssh -L port:node_ip:port cluster -N` → tunnel (auto-killed on Drop)
 8. Inject `mcpServers` into `.claude/settings.local.json` (preserves hooks, env, permissions)
+8b. Create synthesis branch from HEAD and checkout (only if `--git-ssh-key` provided)
 9. `claude -p --output-format json --mcp-config mcp_config.json --strict-mcp-config "prompt"`
    - Overrides `ANTHROPIC_BASE_URL` + `ANTHROPIC_MODEL` env vars
-   - Pipes output through `jq`, saves as `{model}_{id}.json`
+   - Saves output as `{model}_{id}.json`
 10. Restore original `.settings.local.json` from backup
+10b. Cancel Slurm job (model server no longer needed)
 11. Check `check_succeeded_full()`: true → ZREM (job consumed); false → bail (job stays in queue)
+12. Stage, commit, push to origin, restore original branch (only if `--git-ssh-key` provided)
 
 Fail-fast on any error. Job stays in queue on failure. No retries.
 

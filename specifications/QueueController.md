@@ -177,6 +177,19 @@ Also write standalone `mcp_config.json` for `--mcp-config` flag.
 
 **Backup:** existing `settings.local.json` saved to `settings.local.json.queue_backup`. If no existing file, `None` → cleanup removes injected file on restore.
 
+### 8b. Create Synthesis Branch and Checkout
+
+Only if `--git-ssh-key` is provided:
+
+1. Open git repository in project directory via `git2`
+2. Record current HEAD branch name
+3. Build branch name: `{model_name}-{iteration}-{seed}`
+4. Check branch conflict — fail if already exists
+5. Create new branch from HEAD commit
+6. Checkout the new branch
+
+Claude Code writes files directly on the synthesis branch. On failure, `CleanupGuard` restores original branch via `orig_branch` field.
+
 ### 9. Kill Stale mcp_synth
 
 ```
@@ -210,22 +223,28 @@ claude -p \
 - If backup exists: copy back, remove backup
 - If no backup (file was created by us): delete `settings.local.json`
 
-### 11b. Signal Handling (Graceful Shutdown)
+### 11b. Cancel Slurm Job
+
+Model server no longer needed after Claude Code finishes. Cancel Slurm job immediately after restoring settings, regardless of Claude Code exit status.
+
+### 11c. Signal Handling (Graceful Shutdown)
 
 `queue_controller` registers handlers for **SIGINT** (Ctrl+C) and **SIGTERM** (`kill`/`pkill`). On signal:
 
 1. `kill(claude_child_pid)` — terminate Claude Code if running
 2. `ssh cluster scancel {slurm_job_id}` — free GPU node on cluster
 3. `restore_claude_settings()` — restore original `settings.local.json`, remove `mcp_config.json`
-4. `process::exit(128 + signal)` — exit with correct signal exit code
+4. `restore_original_branch()` — checkout original git branch if synthesis branch was active
+5. `process::exit(128 + signal)` — exit with correct signal exit code
 
 Cleanup state is tracked incrementally in a `static Mutex<Option<CleanupState>>`:
 
 | Field | Set After | Reset After |
 |-------|-----------|-------------|
-| `slurm_job_id` | sbatch submission succeeds | ZREM on success |
-| `project_dir` + `settings_backup` | settings backup created | settings restored (step 11) |
+| `slurm_job_id` | sbatch submission succeeds | cancelled after Claude Code finishes (step 11b) |
+| `project_dir` + `settings_backup` | settings backup created | settings restored (step 10) |
 | `claude_child_pid` | `claude` spawned | child exits normally |
+| `orig_branch` | synthesis branch checkout (step 8b) | git persistence completes (step 13) |
 
 Signal handler runs in a **separate thread** (via `signal-hook`'s self-pipe mechanism), allowing the handler to lock the Mutex and perform I/O safely.
 
@@ -243,7 +262,22 @@ If `result_type == "succeeded_full"`: `ZREM cluster_runs {member}` → job consu
 
 Otherwise: **fatal error, job stays in queue**. Operator must inspect and decide.
 
-### 13. Loop
+### 13. Git Commit and Push
+
+Only if `--git-ssh-key` was provided (otherwise skipped):
+
+1. Stage all changes (`git add -A` equivalent via `git2::Index::add_all` + `update_all`)
+2. Create commit with message `"Synthesis: {model} iteration {i} seed {s}"`
+3. Validate remote `origin` is SSH (`git@` or `ssh://` protocol)
+4. Push branch to origin via `auth-git2` (SSH key authentication from file)
+5. Set upstream tracking (`origin/{branch_name}`)
+6. Checkout original branch (restore working tree)
+
+Uses `auth-git2` crate for deterministic SSH authentication — no ssh-agent, no interactive prompts.
+
+### 14. Loop
+
+Repeat from step 1.
 
 Repeat from step 1.
 
@@ -261,7 +295,8 @@ queue_controller \
     [--poll-interval 30] \
     [--poll-timeout 1800] \
     [--tunnel-port 8080] \
-    [--llama-path /home/sforza_2050030/.local/bin/llama-server]
+    [--llama-path /home/sforza_2050030/.local/bin/llama-server] \
+    [--git-ssh-key ~/.ssh/id_ed25519]
 ```
 
 ### Arguments
@@ -279,6 +314,7 @@ Implement arguments with clip.
 | `--poll-timeout` | `1800` | Max seconds wait for RUNNING state |
 | `--tunnel-port` | `8080` | Port for SSH tunnel to compute node |
 | `--llama-path` | `/home/sforza_2050030/.local/bin/llama-server` | llama-server binary path on cluster |
+| `--git-ssh-key` | (optional) | Path to SSH private key for git push authentication |
 
 ---
 
@@ -291,6 +327,7 @@ Implement arguments with clip.
 | `src/queue_controller/queue.rs` | Redis queue client: `peek_job`, `load_job`, `remove_job`, `check_succeeded_full` |
 | `src/queue_controller/slurm.rs` | Sbatch generation, submit via SSH, poll state, node resolution, SSH tunnel |
 | `src/queue_controller/claude.rs` | MCP config injection/restore, kill stale mcp_synth, launch Claude Code |
+| `src/queue_controller/git_persistence.rs` | Git persistence: `checkout_synthesis_branch`, `commit_and_push` |
 
 ---
 
@@ -307,6 +344,8 @@ Strict fail-fast. Any error terminates the controller:
 | Project directory not found | Exit immediately |
 | Claude Code exits non-zero | Exit immediately, job stays in queue |
 | Synthesis not `succeeded_full` | Exit immediately, job stays in queue |
+| Git branch checkout fails | Exit immediately, job stays in queue |
+| Git commit/push fails | Exit immediately (job already removed, slurm cancelled, repo restored) |
 
 No retry logic. No skip-to-next-job. Operator intervention required.
 
@@ -329,6 +368,7 @@ No retry logic. No skip-to-next-job. Operator intervention required.
 - `clap` for CLI
 - `serde_json` for settings file manipulation
 - `signal-hook` for SIGINT/SIGTERM handling (self-pipe thread mechanism)
+- `git2` + `auth-git2` for Git persistence operations
 - `rand_chacha` / `rand_core` (only in companion `populate_queue` binary)
 - `anyhow` for error handling
 
