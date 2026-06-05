@@ -255,29 +255,9 @@ enum DbConfig {
 
 ## Redis Data Model
 
-### Key Patterns
+Full key reference in [RedisDataModel.md](RedisDataModel.md). `mcp_synth` writes all project, test_run, and trial keys; reads them for metrics aggregation.
 
-| Key | Type | Purpose |
-|---|---|---|
-| `project:ids` | String (counter) | Auto-increment project ID |
-| `project:{id}` | Hash | `name`, `number_invariants`, `created_at` |
-| `project:name:{name}` | String | Project name → ID lookup |
-| `test_run:ids` | String (counter) | Auto-increment test run ID |
-| `test_run:{id}` | Hash | `project_id`, `compilation_passed`, `compilation_not_passed`, `created_at` |
-| `test_run:by_project:{pid}` | Set | Set of test run IDs for a project |
-| `synthesis_trial:ids` | String (counter) | Auto-increment trial ID |
-| `synthesis_trial:{id}` | Hash | `test_run_id`, `iteration`, `gas_of_impl`, `result_type`, `not_proved_invariants`, `failure_detail`, `is_full_synthesis`, `created_at` |
-| `synthesis_trial:by_test_run:{trid}` | Sorted Set | Trial IDs sorted by iteration |
-| `synthesis_trial:by_project:{pid}` | Set | Set of trial IDs for a project |
-| `synthesis_trial:gas:by_project:{pid}` | Sorted Set | Trial IDs sorted by gas |
-
-### ID Generation
-
-All three counters use Redis `INCR`. No gaps, but not guaranteed sequential under concurrent access (single-threaded server avoids this in practice).
-
-### Metrics Aggregation
-
-Computed in Rust from Redis indices (no server-side aggregation):
+Metrics aggregation (computed in Rust from Redis indices, no server-side aggregation):
 
 - **Gas:** iterate `synthesis_trial:gas:by_project` sorted set, compute median/peak
 - **Compilation:** iterate `test_run:by_project`, sum per-test-run hashes

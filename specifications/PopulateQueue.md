@@ -170,78 +170,37 @@ or equivalent deterministic RNG.
 
 # Redis Data Model
 
-## Job Hashes
+Full key reference in [RedisDataModel.md](RedisDataModel.md). `populate_queue` writes two key types:
 
-For every generated seed create a Redis hash.
+### Job Hash
 
-Key format:
-
-```text
-{model_name}:{i}
+```
+key: {model_name}:{i}
+type: Hash
+fields: seed, project, prompt
 ```
 
-Examples:
+`model_name` is **not** stored in the hash — it lives in the key. Queue controller extracts it via `rsplitn`.
 
-```text
-qwen3-solidity-27B-Q6_K.gguf:1
-qwen3-solidity-27B-Q6_K.gguf:2
-qwen3-solidity-27B-Q6_K.gguf:3
+Example:
+
+```
+HSET qwen3-solidity-27B-Q6_K.gguf:1 seed "183746192" project "my-project" prompt "..."
 ```
 
-Hash contents:
+### Queue Entry
 
-```text
-{
-    seed: "<generated_seed>",
-    project: "<project>",
-    prompt: "<prompt>"
-}
+```
+key: cluster_runs
+type: Sorted Set
+member: {model_name}:{i}
+score: i (iteration index, higher = higher priority)
 ```
 
 Example:
 
-```text
-qwen3-solidity-27B-Q6_K.gguf:1 -> {
-    seed: "183746192",
-    project: "my-project",
-    prompt: "..."
-}
 ```
-
-`model_name` is **not** stored in the hash. It is encoded in the key `{model_name}:{i}`. The queue controller extracts it from the key when loading job metadata.
-
----
-
-# Queue Population
-
-After creating the hash, enqueue the corresponding job in Redis.
-
-Priority queue key:
-
-```text
-cluster_runs
-```
-
-Use a Redis Sorted Set.
-
-Member:
-
-```text
-{model_name}:{i}
-```
-
-Priority:
-
-```text
-i
-```
-
-Example:
-
-```text
 ZADD cluster_runs 1 qwen3-solidity-27B-Q6_K.gguf:1
-ZADD cluster_runs 2 qwen3-solidity-27B-Q6_K.gguf:2
-ZADD cluster_runs 3 qwen3-solidity-27B-Q6_K.gguf:3
 ```
 
 ---

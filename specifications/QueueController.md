@@ -39,54 +39,16 @@ Single-threaded. One job at a time. Fail-fast on error.
 
 ## Redis Data Model
 
-### Priority Queue
+Full key reference in [RedisDataModel.md](RedisDataModel.md). Controller-relevant keys:
 
-```
-key: cluster_runs
-type: Sorted Set
-member format: {model_name}:{job_id}
-score (priority): higher = higher priority
-```
-
-Example:
-
-```
-ZADD cluster_runs 100 qwen3-solidity-27B-Q6_K.gguf:1
-ZADD cluster_runs  50 qwen3-solidity-27B-Q6_K.gguf:2
-```
-
-### Job Metadata Hash
-
-```
-key: {model_name}:{job_id}
-type: Hash
-fields:
-  - seed      (string, required) — llama.cpp random seed
-  - project   (string, required) — synthesis project name, maps to directory under --project-root
-  - prompt    (string, required) — synthesis prompt text for Claude Code
-```
-
-`model_name` is **not** stored in the hash. It is extracted from the queue member key (`{model_name}:{job_id}`).
-
-Example:
-
-```
-HSET qwen3-solidity-27B-Q6_K.gguf:1 \
-  seed "183746192" \
-  project "my-project" \
-  prompt "Write a Solidity contract..."
-```
-
-### Synthesis Results (read-only by controller)
-
-```
-key: project:name:{project_name}           → project ID
-key: project:{project_id}                  → Hash { name, number_invariants, created_at }
-key: synthesis_trial:by_project:{pid}      → Set of trial_ids
-key: synthesis_trial:{max_id}              → Hash { result_type, ... }
-```
-
-Controller checks `result_type == "succeeded_full"` to decide whether to remove job from queue.
+| Key | Access | Purpose |
+|---|---|---|
+| `cluster_runs` | ZREVRANGE peek, ZREM on success | Priority queue of synthesis jobs |
+| `{model}:{id}` | HGETALL read-only | Job metadata: seed, project, prompt |
+| `project:name:{name}` | GET read-only | Project name → ID lookup |
+| `project:{id}` | HGET read-only | Project fields (name, invariants) |
+| `synthesis_trial:by_project:{pid}` | SMEMBERS read-only | Trial IDs for project |
+| `synthesis_trial:{id}` | HGET read-only | Trial result: checks `result_type == "succeeded_full"` |
 
 ---
 
