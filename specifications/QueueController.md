@@ -285,6 +285,8 @@ queue_controller \
 
 ### Arguments
 
+Implement arguments with clip.
+
 | Flag | Default | Description |
 |---|---|---|
 | `--models-path` | (required) | Base dir of GGUF model files on cluster |
@@ -349,6 +351,7 @@ No retry logic. No skip-to-next-job. Operator intervention required.
 - `anyhow` for error handling
 
 Runtime dependencies:
+
 - `ssh` client on PATH
 - Slurm cluster accessible via SSH host `cluster`
 - Redis server
