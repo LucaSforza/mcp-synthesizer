@@ -3,6 +3,9 @@
 ## CRITICAL: Never delete TODO comments
 TODO comments in code are intentional technical-debt markers. They document planned improvements, known limitations, and future work. Deleting them without explicit user request is destructive — it erases context the user depends on. Never remove, rephrase, or resolve a TODO unless the user says "remove TODO" or "resolve TODO".
 
+## Style: run cargo fmt occasionally
+Not required before every commit, but run `cargo fmt` from time to time to keep formatting consistent. Avoid committing large formatting-only diffs mixed with logic changes — do fmt in its own commit.
+
 MCP server per Solidity smart contract synthesis. Parte del progetto `git_diff_checker` — protected LLM agent environment per Foundry development.
 
 ## Parent Project Context
