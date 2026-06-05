@@ -13,7 +13,7 @@ use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
@@ -48,12 +48,7 @@ fn do_cleanup(state: &CleanupState) {
     }
 
     if let Some(ref job_id) = state.slurm_job_id {
-        let _ = Command::new("ssh")
-            .args([&state.cluster_host, "scancel", job_id])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        eprintln!("[CLEANUP] Cancelled Slurm job {job_id}");
+        slurm::cancel_job(&state.cluster_host, job_id);
     }
 
     if let Some(ref project_dir) = state.project_dir {
@@ -62,6 +57,24 @@ fn do_cleanup(state: &CleanupState) {
     }
 
     eprintln!("[CLEANUP] Graceful shutdown complete");
+}
+
+/// Drop guard: runs cleanup on any remaining state when `run()` exits.
+struct CleanupGuard;
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        if let Ok(guard) = CLEANUP.lock()
+            && let Some(ref state) = *guard
+        {
+            let has_work = state.claude_child_pid.is_some()
+                || state.slurm_job_id.is_some()
+                || state.project_dir.is_some();
+            if has_work {
+                do_cleanup(state);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +152,9 @@ pub fn run() -> Result<()> {
         }
     });
 
+    // Drop guard cleans up any remaining state on exit (Ok or Err).
+    let _guard = CleanupGuard;
+
     let mut qc = queue::QueueClient::open(&args.redis_url)?;
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
 
@@ -195,6 +211,17 @@ pub fn run() -> Result<()> {
         }
         eprintln!("[DEBUG] Project dir: {project_dir:?}");
 
+        // 7b. Read project's system prompt (prompt.md) for --append-system-prompt.
+        let system_prompt_path = project_dir.join("prompt.md");
+        let system_prompt = if system_prompt_path.exists() {
+            std::fs::read_to_string(&system_prompt_path)
+                .with_context(|| format!("failed to read {system_prompt_path:?}"))?
+        } else {
+            eprintln!("[WARN] No prompt.md found at {system_prompt_path:?}, --append-system-prompt omitted");
+            String::new()
+        };
+        eprintln!("[DEBUG] System prompt (prompt.md): {} bytes", system_prompt.len());
+
         // 8. Inject MCP settings (backup existing).
         let project_dir_str = project_dir.to_string_lossy().to_string();
         let backup = claude::setup_claude_settings(
@@ -214,7 +241,7 @@ pub fn run() -> Result<()> {
         eprintln!("[DEBUG] Launching Claude Code...");
         let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
         let mut claude_child = claude::spawn_claude(
-            &project_dir, &job.prompt, &output_path, model_name,
+            &project_dir, &job.prompt, &system_prompt, &output_path, model_name,
         )?;
         let child_pid = claude_child.id();
         with_cleanup(|s| s.claude_child_pid = Some(child_pid));

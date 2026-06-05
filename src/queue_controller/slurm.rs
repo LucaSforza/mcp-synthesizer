@@ -283,6 +283,16 @@ pub fn establish_tunnel(cluster_host: &str, node_ip: &str, port: u16) -> Result<
     Ok(TunnelHandle { child })
 }
 
+/// Cancel a Slurm job via `ssh cluster scancel`.
+pub fn cancel_job(cluster_host: &str, job_id: &str) {
+    let _ = Command::new("ssh")
+        .args([cluster_host, "scancel", job_id])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    eprintln!("[DEBUG] Cancelled Slurm job {job_id}");
+}
+
 impl Drop for TunnelHandle {
     fn drop(&mut self) {
         let _ = self.child.kill();

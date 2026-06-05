@@ -111,9 +111,11 @@ pub fn kill_existing_mcp_synth() {
 
 /// Spawn Claude Code process with prompt in project directory.
 /// Returns the Child handle so caller can store PID for signal handling and wait.
+/// `system_prompt` is passed via `--append-system-prompt` (project's prompt.md).
 pub fn spawn_claude(
     project_dir: &Path,
     prompt: &str,
+    system_prompt: &str,
     output_path: &Path,
     model_name: &str,
 ) -> Result<std::process::Child> {
@@ -122,19 +124,25 @@ pub fn spawn_claude(
 
     let mcp_config_path = project_dir.join(".claude").join("mcp_config.json");
     let mcp_config_str = mcp_config_path.to_string_lossy().to_string();
+    let mut args: Vec<&str> = vec![
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--dangerously-skip-permissions",
+        "--include-hook-events",
+        "--verbose",
+        "--mcp-config",
+        &mcp_config_str,
+        "--strict-mcp-config",
+    ];
+    if !system_prompt.is_empty() {
+        args.push("--append-system-prompt");
+        args.push(system_prompt);
+    }
+    args.push(prompt);
+
     let child = Command::new("claude")
-        .args([
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--dangerously-skip-permissions",
-            "--include-hook-events",
-            "--verbose",
-            "--mcp-config",
-            &mcp_config_str,
-            "--strict-mcp-config",
-            prompt,
-        ])
+        .args(&args)
         .current_dir(project_dir)
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")
         .env("ANTHROPIC_MODEL", model_name)
