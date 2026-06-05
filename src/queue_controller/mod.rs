@@ -5,6 +5,7 @@
 //! Processes sequentially until queue empty.
 
 mod claude;
+mod git_persistence;
 mod queue;
 mod slurm;
 
@@ -270,6 +271,17 @@ pub fn run() -> Result<()> {
             qc.remove_job(&member)?;
             with_cleanup(|s| s.slurm_job_id = None);
             eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+
+            // 13. Persist synthesis results to Git.
+            let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
+            let iteration = job_id as u64;
+            let commit_message = format!(
+                "Synthesis: {model_name} iteration {iteration} seed {seed}"
+            );
+            let git = git_persistence::GitPersistence::new(&project_dir)
+                .context("git persistence setup failed")?;
+            git.persist_synthesis(model_name, iteration, seed, &commit_message)
+                .context("failed to persist synthesis to git")?;
         } else {
             bail!("synthesis not successful for {member}, job remains in queue");
         }
