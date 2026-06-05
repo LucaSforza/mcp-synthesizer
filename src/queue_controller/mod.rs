@@ -8,6 +8,7 @@ mod claude;
 mod git_persistence;
 mod queue;
 mod slurm;
+mod synthesis_usage;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -312,7 +313,27 @@ pub fn run() -> Result<()> {
             qc.remove_job(&member)?;
             eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
 
-            // 13. Commit and push synthesis results to Git.
+            // 13. Parse usage metrics from Claude Code output while file still exists
+            //     (before git commit_and_push switches back to original branch).
+            let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
+            let usage_opt = match synthesis_usage::parse_output_file(&output_path) {
+                Ok(usage) => {
+                    eprintln!(
+                        "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
+                        usage.input_tokens, usage.output_tokens, usage.cost_usd,
+                    );
+                    Some(usage)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[WARN] Failed to parse usage from {}: {e:#}",
+                        output_path.display(),
+                    );
+                    None
+                }
+            };
+
+            // 14. Commit and push synthesis results to Git (switches back to original branch).
             if let Some((ref orig_branch, ref branch_name)) = synthesis_branch {
                 let auth_config = git_persistence::GitAuthConfig::new(
                     args.git_ssh_key.clone().expect("git_ssh_key checked above"),
@@ -327,7 +348,29 @@ pub fn run() -> Result<()> {
                 with_cleanup(|s| s.orig_branch = None);
             }
 
-            // 14. Loop to next job.
+            // 15. Persist usage to Redis (no file access needed, data in memory).
+            if let Some(usage) = usage_opt {
+                match redis::Client::open(args.redis_url.as_str())
+                    .and_then(|c| c.get_connection())
+                {
+                    Ok(mut usage_conn) => {
+                        if let Err(e) = synthesis_usage::write_usage_to_test_run(
+                            &mut usage_conn,
+                            &job.project,
+                            &usage,
+                        ) {
+                            eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] Failed to connect to Redis for usage write: {e:#}"
+                        );
+                    }
+                }
+            }
+
+            // 16. Loop to next job.
         } else {
             bail!("synthesis not successful for {member}, job remains in queue");
         }
