@@ -20,7 +20,6 @@ build:
 
     echo -e "\n--- VERIFYING DEPENDENCIES VIA READELF ---"
 
-    
 # Install all binaries safely with md5sum checks
 install: build
     #!/usr/bin/env bash
@@ -49,11 +48,11 @@ install: build
 
 # Start Redis via podman compose
 redis-up:
-    podman-compose up -d
+    docker compose up -d
 
 # Stop Redis
 redis-down:
-    podman-compose down
+    docker compose down
 
 # Run full tests with Redis (single-threaded to avoid FLUSHALL interference)
 test: redis-up
