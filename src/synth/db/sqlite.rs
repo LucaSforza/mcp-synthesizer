@@ -2,10 +2,12 @@ use rusqlite::{params, Connection as SqliteConnection};
 
 use crate::synth::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
 
+#[deprecated(note = "SQLite backend is deprecated. Use --db-type redis instead.")]
 pub struct SqliteDatabase {
     conn: SqliteConnection,
 }
 
+#[allow(deprecated)]
 impl SqliteDatabase {
     pub fn new(path: &str) -> Result<Self, DbError> {
         eprintln!("[DEBUG] SqliteDatabase::new path=\"{}\"", path);
@@ -102,6 +104,7 @@ impl SqliteDatabase {
     }
 }
 
+#[allow(deprecated)]
 impl Database for SqliteDatabase {
     fn get_or_create_project(
         &self,

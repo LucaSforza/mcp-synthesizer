@@ -158,6 +158,7 @@ pub trait Database: Send {
 #[derive(Clone, Debug)]
 pub enum DbConfig {
     Redis { url: String },
+    #[deprecated(note = "SQLite backend is deprecated. Use Redis instead.")]
     Sqlite { path: String },
 }
 
@@ -168,6 +169,7 @@ impl DbConfig {
                 let db = RedisDatabase::new(url)?;
                 Ok(Box::new(db))
             }
+            #[allow(deprecated)]
             DbConfig::Sqlite { path } => {
                 let db = SqliteDatabase::new(path)?;
                 Ok(Box::new(db))
@@ -184,6 +186,7 @@ mod redis;
 mod sqlite;
 
 pub use redis::RedisDatabase;
+#[allow(deprecated)]
 pub use sqlite::SqliteDatabase;
 
 #[cfg(test)]

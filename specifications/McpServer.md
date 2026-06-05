@@ -4,7 +4,7 @@
 
 MCP server for Solidity smart contract synthesis. Integrates Foundry toolchain (`forge`, `halmos`) into Claude Code via MCP protocol. Uses rmcp SDK over stdio transport.
 
-Persists synthesis trials (compilation, fuzzing, halmos verification) to either Redis or SQLite. Two backends, same `Database` trait — selected at startup via `--db-type`.
+Persists synthesis trials (compilation, fuzzing, halmos verification) to Redis via a `Database` trait abstraction.
 
 **Binary name:** `mcp_synth`
 **Source:** `src/bin/mcp_synth.rs` + `src/synth/{mod,tools,pipeline,db}.rs`
@@ -31,10 +31,12 @@ Persists synthesis trials (compilation, fuzzing, halmos verification) to either 
                             │  └────┬──────────────┬──────┘  │
                             └───────┼──────────────┼─────────┘
                                     │              │
-                           ┌────────▼──┐    ┌──────▼───────┐
-                           │   Redis   │    │   SQLite     │
-                           │ (default) │    │ (opt-in)     │
-                           └───────────┘    └──────────────┘
+                           ┌────────▼──┐           │
+                           │   Redis   │           │
+                           │ (default) │           │
+                           └───────────┘           │
+                                    └──────────────┘
+                                    (Database trait)
 ```
 
 Four MCP tools. `forge_install`, `forge_build`, `forge_test` are individual commands. `run_synthesis` is the full pipeline orchestration.
@@ -46,9 +48,7 @@ Four MCP tools. `forge_install`, `forge_build`, `forge_test` are individual comm
 ```
 mcp_synth --cwd /path/to/foundry-project --project my-contracts \
     [--invariants 5] \
-    [--db-type redis|sqlite] \
-    [--redis-url redis://localhost:6379] \
-    [--db-path ~/Documents/solidity-synthesis.db]
+    [--redis-url redis://localhost:6379]
 ```
 
 ### Arguments
@@ -58,13 +58,11 @@ mcp_synth --cwd /path/to/foundry-project --project my-contracts \
 | `--cwd` / `-c` | yes | — | Path to Foundry project directory |
 | `--project` / `-p` | yes | — | Project name identifier |
 | `--invariants` / `-i` | no | `0` | Number of invariants for halmos verification |
-| `--db-type` | no | `"redis"` | Backend: `"redis"` or `"sqlite"` |
-| `--redis-url` / `-u` | no | `redis://localhost:6379` | Redis URL (used only with `--db-type redis`) |
-| `--db-path` / `-l` | no | `$HOME/Documents/solidity-synthesis.db` | SQLite file path (used only with `--db-type sqlite`) |
+| `--redis-url` / `-u` | no | `redis://localhost:6379` | Redis server URL |
 
 ### Startup flow
 
-1. Parse args, build `DbConfig`
+1. Parse args, build `DbConfig::Redis { url }`
 2. Connect to database → `Box<dyn Database>`
 3. `get_or_create_project(name, invariants)` → `Project { id, name, number_invariants }`
 4. `create_test_run(project_id)` → `TestRun { id, ... }`
@@ -223,7 +221,7 @@ Seven methods, all `&self`, returning `Result<..., DbError>`:
 
 ### Valid Result Types
 
-Six values, validated at the Rust level (`validate_trial_params`). SQLite also enforces a CHECK constraint.
+Six values, validated at the Rust level (`validate_trial_params`).
 
 ```
 failed_compilation
@@ -241,15 +239,14 @@ succeeded_full
 ```rust
 enum DbConfig {
     Redis { url: String },
-    Sqlite { path: String },
 }
 ```
 
-`DbConfig::connect()` returns `Box<dyn Database>`. Selected at startup via `--db-type`.
+`DbConfig::connect()` returns `Box<dyn Database>`.
 
 ### Error Type
 
-`DbError` with three variants: `Redis(RedisError)`, `Sqlite(rusqlite::Error)`, `InvalidResultType(String)`. Implements `Display`, `std::error::Error`, `From` for both inner error types.
+`DbError` with variants: `Redis(RedisError)`, `InvalidResultType(String)`. Implements `Display`, `std::error::Error`, `From` for inner error types.
 
 ---
 
@@ -267,81 +264,20 @@ Metrics aggregation (computed in Rust from Redis indices, no server-side aggrega
 
 ---
 
-## SQLite Schema
-
-### Tables
-
-```sql
-CREATE TABLE project (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    number_invariants INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE test_run (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES project(id),
-    compilation_passed INTEGER NOT NULL DEFAULT 0,
-    compilation_not_passed INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE synthesis_trial (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    test_run_id INTEGER NOT NULL REFERENCES test_run(id),
-    iteration INTEGER NOT NULL,
-    gas_of_implementation INTEGER,
-    result_type TEXT NOT NULL
-        CHECK (result_type IN (
-            'failed_compilation','failed_fuzzing','succeeded_fuzzing',
-            'failed_halmos','succeeded_partial','succeeded_full'
-        )),
-    not_proved_invariants INTEGER DEFAULT 0,
-    failure_detail TEXT,
-    is_full_synthesis INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-```
-
-### Migrations
-
-Two migrations executed in order at connection startup:
-
-**Migration 1:** Add `is_full_synthesis` column to `synthesis_trial` (if missing). Detected by attempting SELECT — if column not found, runs `ALTER TABLE synthesis_trial ADD COLUMN is_full_synthesis INTEGER NOT NULL DEFAULT 0`.
-
-**Migration 2:** Expand CHECK constraint to include `'succeeded_fuzzing'` (if the old CHECK rejects it). Attempts INSERT with `result_type='succeeded_fuzzing'`. If rejected, rebuilds the table: rename old → create new with expanded CHECK → INSERT INTO ... SELECT → DROP old.
-
-### Metrics Aggregation
-
-Seven SQL queries:
-
-1. Validate project exists
-2. `MAX(gas_of_implementation)` per project (peak gas)
-3. `gas_of_implementation` ordered (median computed in Rust from Vec)
-4. `SUM(compilation_passed)`, `SUM(compilation_not_passed)` across test runs
-5. `COUNT(*)` synthesis trials
-6. `SUM(number_invariants - not_proved_invariants)` where `result_type = 'succeeded_full'` (proven)
-7. `SUM(not_proved_invariants)` where `result_type LIKE 'succeeded%'` (unproven)
-8. `MIN(iteration)` where `result_type LIKE 'succeeded%'` (succeeded_iterations)
-
----
-
 ## Testing
 
 ### Test structure
 
-Three test files, all using `#[cfg(test)]`:
+Two test files, all using `#[cfg(test)]`:
 
 | File | Tests | Backend | Isolation |
 |---|---|---|---|
 | `src/db/redis_test.rs` | 15 | Redis DB 1 | `FLUSHDB` per module |
-| `src/db/sqlite_test.rs` | 15 | SQLite | `:memory:` per module |
 | `src/pipeline_test.rs` | 12 | Mocked commands | In-process mocking |
 
 ### Test patterns
 
-**Database tests:** `setup_db()` → call trait method → unwrap → assert on fields. Near-identical test suite runs against both backends to verify trait contract parity.
+**Database tests:** `setup_db()` → call trait method → unwrap → assert on fields.
 
 **Pipeline tests:** `#[cfg(test)] mock_commands: Option<Vec<Result<(String, bool), String>>>` field on `SynthesisPipeline`. Each entry simulates stdout and exit status. Run command pops from front of vec. No real forge/halmos ever executed.
 
@@ -350,7 +286,6 @@ Three test files, all using `#[cfg(test)]`:
 ```bash
 just redis-up                     # start Redis
 TEST_REDIS_URL=redis://localhost:6379/1 cargo test -- --test-threads 1
-cargo test sqlite_tests -- --test-threads 1
 ```
 
 Redis tests use DB `1` to avoid touching production data in DB `0`. `--test-threads 1` prevents concurrent FLUSHDB interference.
@@ -376,7 +311,7 @@ RDB snapshots at 300s/1key or 60s/10keys. Named volume, auto-restart.
 
 ## Companion Binary: `migrate_sqlite_to_redis`
 
-Standalone tool to migrate data from SQLite to Redis.
+Legacy migration tool. Standalone binary to migrate existing SQLite data to Redis.
 
 ```
 cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:6379
@@ -394,7 +329,7 @@ Fail-fast in main: any `DbError`, tool failure, or pipeline error returns `Err` 
 
 Errors are descriptive strings returned as `Result<String, String>`. Claude Code sees the failure message and can decide how to respond.
 
-Invalid result types are caught at the Rust level by `validate_trial_params()` before any DB write. SQLite additionally enforces via CHECK constraint.
+Invalid result types are caught at the Rust level by `validate_trial_params()` before any DB write.
 
 Missing configuration (e.g., `forge` not on `PATH`, `halmos` not installed) surfaces as `std::process::Command` errors at tool invocation time.
 
@@ -421,7 +356,6 @@ Missing configuration (e.g., `forge` not on `PATH`, `halmos` not installed) surf
 | `tokio` | Async runtime | Full |
 | `clap` | CLI parsing | Derive macros |
 | `redis` | Redis client | `tokio-comp` feature, pure Rust |
-| `rusqlite` | SQLite | `bundled` feature (embeds libsqlite3) |
 | `serde` / `serde_json` | Forge JSON parsing | Derive |
 | `chrono` | Timestamps | ISO 8601 formatting |
 | `tempfile` | Test temp DBs | dev-dependency only |

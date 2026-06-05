@@ -53,7 +53,7 @@ Binary at `target/release/mcp_synth`.
 # Redis backend (default)
 mcp_synth --cwd ./my-foundry-project --project my-contracts
 
-# SQLite backend
+# SQLite backend (DEPRECATED — use Redis instead)
 mcp_synth --cwd ./my-foundry-project --project my-contracts --db-type sqlite
 ```
 
@@ -64,9 +64,9 @@ mcp_synth --cwd ./my-foundry-project --project my-contracts --db-type sqlite
 | `--cwd` | `-c` | Foundry project directory (required) | — |
 | `--project` | `-p` | Project name identifier (required) | — |
 | `--invariants` | `-i` | Number of Halmos invariants | `0` |
-| `--db-type` | | Backend: `redis` or `sqlite` | `redis` |
+| `--db-type` | | Backend: `redis` (default) or `sqlite` (deprecated) | `redis` |
 | `--redis-url` | `-u` | Redis URL | `redis://localhost:6379` |
-| `--db-path` | `-l` | SQLite path (when `--db-type sqlite`) | `$HOME/Documents/solidity-synthesis.db` |
+| `--db-path` | `-l` | SQLite path (deprecated, only with `--db-type sqlite`) | `$HOME/Documents/solidity-synthesis.db` |
 
 ### MCP Tools
 

@@ -16,10 +16,10 @@ This MCP server is the **authorized path** for forge operations and synthesis. W
 
 Two backends via `Database` trait. Selected at runtime via `--db-type` flag. Both compiled unconditionally.
 
-| Backend | CLI flag | Connection param |
-|---------|----------|------------------|
-| Redis (default) | `--db-type redis` | `--redis-url redis://localhost:6379` |
-| SQLite | `--db-type sqlite` | `--db-path <path>` |
+| Backend | CLI flag | Connection param | Status |
+|---------|----------|------------------|--------|
+| Redis (default) | `--db-type redis` | `--redis-url redis://localhost:6379` | ✅ Supported |
+| SQLite | `--db-type sqlite` | `--db-path <path>` | 🚫 Deprecated — use Redis |
 
 ### Redis Databases
 
@@ -30,9 +30,11 @@ Two backends via `Database` trait. Selected at runtime via `--db-type` flag. Bot
 
 Tests use `FLUSHDB` on DB 1 per module — never touch DB 0 real data.
 
-### SQLite Storage
+### SQLite Storage (DEPRECATED)
 
 Default path: `$HOME/Documents/solidity-synthesis.db`. SQLite backend has schema migrations in `SqliteDatabase::run_migrations()` — handles CREATE TABLE and CHECK constraint expansion for `succeeded_fuzzing`.
+
+**SQLite is deprecated. Use Redis instead.**
 
 ### Persistence
 

@@ -1,3 +1,9 @@
+//! Migration tool: SQLite → Redis.
+//!
+//! Legacy tool. SQLite backend is deprecated. This binary exists to migrate
+//! existing SQLite data to Redis before the SQLite code is removed.
+//! New deployments should use Redis directly.
+
 use clap::Parser;
 use redis::{Client, Commands};
 use rusqlite::Connection;
