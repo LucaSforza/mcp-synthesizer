@@ -134,7 +134,7 @@ pub struct Args {
 }
 
 // ---------------------------------------------------------------------------
-// Loop step functions
+// Loop step functions (in execution order)
 // ---------------------------------------------------------------------------
 
 /// Step 1-3: Peek highest-priority job from Redis queue,
@@ -144,6 +144,7 @@ pub struct Args {
 fn peek_and_load_job(
     qc: &mut queue::QueueClient,
 ) -> Result<Option<(String, String, String, i64, queue::JobMetadata)>> {
+    eprintln!("[DEBUG] [Step 1-3] peek_and_load_job — peek Redis queue, parse model:job_id, load metadata");
     let (member, score) = match qc.peek_job()? {
         Some(m) => m,
         None => return Ok(None),
@@ -182,6 +183,7 @@ fn submit_slurm_job(
     llama_path: &str,
     seed: &str,
 ) -> Result<String> {
+    eprintln!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
     let model_path = models_path.join(model_name);
     eprintln!("[DEBUG] Model path: {model_path:?}");
 
@@ -203,6 +205,7 @@ fn wait_and_create_tunnel(
     poll_timeout: u64,
     tunnel_port: u16,
 ) -> Result<slurm::TunnelHandle> {
+    eprintln!("[DEBUG] [Step 6] wait_and_create_tunnel — poll job status, resolve node IP, establish SSH tunnel");
     slurm::poll_job(cluster_host, slurm_job_id, poll_interval, poll_timeout)?;
     let node_name = slurm::get_job_node(cluster_host, slurm_job_id)?;
     let node_ip = slurm::node_name_to_ip(&node_name);
@@ -216,6 +219,7 @@ fn prepare_project_environment(
     project_root: &Path,
     project_name: &str,
 ) -> Result<(PathBuf, String)> {
+    eprintln!("[DEBUG] [Step 7+7b] prepare_project_environment — resolve project dir, read prompt.md");
     let project_dir = claude::resolve_project_dir(project_root, project_name);
     if !project_dir.exists() {
         bail!("project directory not found: {project_dir:?}");
@@ -255,6 +259,7 @@ fn setup_claude_and_git(
     seed: u64,
     iteration: u64,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
+    eprintln!("[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch");
     // Step 8: inject MCP settings (backup existing).
     let project_dir_str = project_dir.to_string_lossy().to_string();
     let backup = claude::setup_claude_settings(
@@ -297,9 +302,10 @@ fn run_claude_code(
     model_name: &str,
     job_id_str: &str,
 ) -> Result<(std::process::Child, PathBuf)> {
+    eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
     eprintln!("[DEBUG] Launching Claude Code...");
-    let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
+    let output_path = project_dir.join(format!("{}_{}.jsonl", model_name, job_id_str));
     let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, model_name)?;
     Ok((child, output_path))
 }
@@ -311,6 +317,7 @@ fn cleanup_environment(
     backup: Option<PathBuf>,
     cluster_host: &str,
 ) -> Result<()> {
+    eprintln!("[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job");
     // Step 10: restore settings.
     claude::restore_claude_settings(project_dir, backup)?;
     with_cleanup(|s| {
@@ -325,8 +332,42 @@ fn cleanup_environment(
         .and_then(|mut guard| guard.as_mut().and_then(|s| s.slurm_job_id.take()));
     if let Some(ref job_id) = slurm_job_id {
         slurm::cancel_job(cluster_host, job_id);
+    } else {
+        eprintln!("[WARN] no slurm job id to cancel");
     }
 
+    Ok(())
+}
+
+/// Step 11: Check Claude Code exit status and verify synthesis produced
+/// a `succeeded_full` trial in the database.
+///
+/// Returns `Ok(())` only if both checks pass.
+fn check_claude_result(
+    claude_status: std::process::ExitStatus,
+    output_path: &Path,
+    qc: &mut queue::QueueClient,
+    project_name: &str,
+    member: &str,
+) -> Result<()> {
+    eprintln!("[DEBUG] [Step 11] check_claude_result — verify exit status + succeeded_full");
+    if !claude_status.success() {
+        bail!("Claude Code exited with status {claude_status}");
+    }
+    eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
+
+    if !qc.check_succeeded_full(project_name)? {
+        bail!("synthesis not successful for {member}, job remains in queue");
+    }
+
+    Ok(())
+}
+
+/// Step 12: Remove successfully completed job from Redis queue.
+fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()> {
+    eprintln!("[DEBUG] [Step 12] remove_job_from_queue — synthesis succeeded");
+    qc.remove_job(member)?;
+    eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
     Ok(())
 }
 
@@ -335,6 +376,7 @@ fn cleanup_environment(
 ///
 /// All errors are non-fatal (logged as WARN).
 fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &str) {
+    eprintln!("[DEBUG] [Step 13] persist_usage_to_redis — parse Claude Code output, write usage to Redis");
     match synthesis_usage::parse_output_file(output_path) {
         Ok(usage) => {
             eprintln!(
@@ -372,6 +414,7 @@ fn push_synthesis_to_git(
     orig_branch: &str,
     branch_name: &str,
 ) -> Result<()> {
+    eprintln!("[DEBUG] [Step 14] push_synthesis_to_git — commit, push, restore branch");
     let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.to_path_buf());
     let commit_message = format!("Synthesis: {model_name} iteration {iteration} seed {seed}");
     let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
@@ -420,7 +463,7 @@ pub fn run() -> Result<()> {
 
     loop {
         // ------------------------------------------------------------------
-        // Phase 1 — Acquire job from Redis queue
+        // Phase 1 — Acquire job from Redis queue (Step 1-3)
         // ------------------------------------------------------------------
         let Some((member, model_name, job_id_str, job_id, job)) = peek_and_load_job(&mut qc)?
         else {
@@ -431,7 +474,7 @@ pub fn run() -> Result<()> {
         let iteration = job_id as u64;
 
         // ------------------------------------------------------------------
-        // Phase 2 — Submit Slurm job and establish SSH tunnel
+        // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
         // ------------------------------------------------------------------
         let slurm_job_id = submit_slurm_job(
             &args.cluster_host,
@@ -451,7 +494,7 @@ pub fn run() -> Result<()> {
         )?;
 
         // ------------------------------------------------------------------
-        // Phase 3 — Prepare local environment
+        // Phase 3 — Prepare local environment (Step 7+7b, Step 8+8b)
         // ------------------------------------------------------------------
         let (project_dir, system_prompt) =
             prepare_project_environment(&args.project_root, &job.project)?;
@@ -467,7 +510,7 @@ pub fn run() -> Result<()> {
         )?;
 
         // ------------------------------------------------------------------
-        // Phase 4 — Run Claude Code
+        // Phase 4 — Run Claude Code (Step 9)
         // ------------------------------------------------------------------
         let (mut claude_child, output_path) = run_claude_code(
             &project_dir,
@@ -485,27 +528,18 @@ pub fn run() -> Result<()> {
         with_cleanup(|s| s.claude_child_pid = None);
 
         // ------------------------------------------------------------------
-        // Phase 5 — Tear down environment (always runs after Claude)
+        // Phase 5 — Tear down environment (Step 10+10b)
         // ------------------------------------------------------------------
         cleanup_environment(&project_dir, backup, &args.cluster_host)?;
 
         // ------------------------------------------------------------------
-        // Phase 6 — Evaluate result
+        // Phase 6 — Evaluate result (Step 11-12)
         // ------------------------------------------------------------------
-        if !claude_status.success() {
-            bail!("Claude Code exited with status {claude_status}");
-        }
-        eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
-
-        if !qc.check_succeeded_full(&job.project)? {
-            bail!("synthesis not successful for {member}, job remains in queue");
-        }
-
-        qc.remove_job(&member)?;
-        eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+        check_claude_result(claude_status, &output_path, &mut qc, &job.project, &member)?;
+        remove_job_from_queue(&mut qc, &member)?;
 
         // ------------------------------------------------------------------
-        // Phase 7 — Persist results
+        // Phase 7 — Persist results (Step 13-14)
         // ------------------------------------------------------------------
         persist_usage_to_redis(&args.redis_url, &output_path, &job.project);
 
