@@ -51,7 +51,7 @@ impl Database for RedisDatabase {
                 let _: bool = conn.hset(
                     &project_key,
                     "number_invariants",
-                    &number_invariants.to_string(),
+                    number_invariants.to_string(),
                 )?;
                 let _: bool = conn.hset(&project_key, "created_at", &now)?;
                 let _: () = conn.set(&name_key, id)?;
@@ -71,7 +71,7 @@ impl Database for RedisDatabase {
         let id: i64 = conn.incr("test_run:ids", 1)?;
         let key = format!("test_run:{}", id);
         let now = Utc::now().to_rfc3339();
-        let _: bool = conn.hset(&key, "project_id", &project_id.to_string())?;
+        let _: bool = conn.hset(&key, "project_id", project_id.to_string())?;
         let _: bool = conn.hset(&key, "compilation_passed", "0")?;
         let _: bool = conn.hset(&key, "compilation_not_passed", "0")?;
         let _: bool = conn.hset(&key, "created_at", &now)?;
@@ -114,22 +114,22 @@ impl Database for RedisDatabase {
         let trial_key = format!("synthesis_trial:{}", id);
         let now = Utc::now().to_rfc3339();
 
-        let _: bool = conn.hset(&trial_key, "test_run_id", &test_run_id.to_string())?;
-        let _: bool = conn.hset(&trial_key, "iteration", &iteration.to_string())?;
+        let _: bool = conn.hset(&trial_key, "test_run_id", test_run_id.to_string())?;
+        let _: bool = conn.hset(&trial_key, "iteration", iteration.to_string())?;
         let _: bool = conn.hset(&trial_key, "result_type", result_type)?;
         let _: bool = conn.hset(
             &trial_key,
             "not_proved_invariants",
-            &not_proved_invariants.to_string(),
+            not_proved_invariants.to_string(),
         )?;
         let _: bool = conn.hset(
             &trial_key,
             "is_full_synthesis",
-            &(is_full_synthesis as i32).to_string(),
+            (is_full_synthesis as i32).to_string(),
         )?;
         let _: bool = conn.hset(&trial_key, "created_at", &now)?;
         if let Some(gas) = gas_of_implementation {
-            let _: bool = conn.hset(&trial_key, "gas_of_implementation", &gas.to_string())?;
+            let _: bool = conn.hset(&trial_key, "gas_of_implementation", gas.to_string())?;
         }
         if let Some(detail) = failure_detail {
             let _: bool = conn.hset(&trial_key, "failure_detail", detail)?;

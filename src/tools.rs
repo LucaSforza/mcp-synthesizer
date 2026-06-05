@@ -80,7 +80,7 @@ impl SynthesisTools {
             })?;
 
         let combined = String::from_utf8_lossy(&output.stdout).to_string()
-            + &String::from_utf8_lossy(&output.stderr).to_string();
+            + String::from_utf8_lossy(&output.stderr).as_ref();
 
         if output.status.success() {
             eprintln!(
@@ -117,7 +117,7 @@ impl SynthesisTools {
             })?;
 
         let combined = String::from_utf8_lossy(&output.stdout).to_string()
-            + &String::from_utf8_lossy(&output.stderr).to_string();
+            + String::from_utf8_lossy(&output.stderr).as_ref();
 
         if output.status.success() {
             self.db
@@ -162,7 +162,7 @@ impl SynthesisTools {
             })?;
 
         let combined = String::from_utf8_lossy(&output.stdout).to_string()
-            + &String::from_utf8_lossy(&output.stderr).to_string();
+            + String::from_utf8_lossy(&output.stderr).as_ref();
 
         let iteration = self.next_iteration();
         let gas = extract_forge_gas_json(&combined);

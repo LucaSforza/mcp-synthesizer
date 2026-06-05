@@ -101,7 +101,7 @@ fn test_record_trial_fuzzing_only() {
         )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_fuzzing");
-    assert_eq!(trial.is_full_synthesis, false);
+    assert!(!trial.is_full_synthesis);
     assert_eq!(trial.not_proved_invariants, 0);
     assert_eq!(trial.gas_of_implementation, None);
 }

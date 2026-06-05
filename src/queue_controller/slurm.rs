@@ -125,7 +125,6 @@ pub fn submit_sbatch(cluster_host: &str, sbatch_content: &str) -> Result<String>
     let stdout = String::from_utf8_lossy(&output.stdout);
     // sbatch prints: "Submitted batch job 123456"
     let job_id = stdout
-        .trim()
         .split_whitespace()
         .last()
         .context("unable to parse job ID from sbatch output")?
@@ -143,7 +142,7 @@ pub fn poll_job(
     let max_polls = if interval_secs == 0 {
         u64::MAX
     } else {
-        (timeout_secs + interval_secs - 1) / interval_secs
+        timeout_secs.div_ceil(interval_secs)
     };
 
     for attempt in 0..max_polls {

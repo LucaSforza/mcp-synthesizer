@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
     for (id, name, invariants, created_at) in &projects {
         let key = format!("project:{}", id);
         let _: bool = redis.hset(&key, "name", name.as_str())?;
-        let _: bool = redis.hset(&key, "number_invariants", &invariants.to_string())?;
+        let _: bool = redis.hset(&key, "number_invariants", invariants.to_string())?;
         let _: bool = redis.hset(&key, "created_at", created_at)?;
         let _: () = redis.set(format!("project:name:{}", name), *id)?;
         eprintln!("  project {}: \"{}\" ({} invariants)", id, name, invariants);
@@ -76,9 +76,9 @@ fn main() -> anyhow::Result<()> {
 
     for (id, project_id, comp_p, comp_np, created_at) in &test_runs {
         let key = format!("test_run:{}", id);
-        let _: bool = redis.hset(&key, "project_id", &project_id.to_string())?;
-        let _: bool = redis.hset(&key, "compilation_passed", &comp_p.to_string())?;
-        let _: bool = redis.hset(&key, "compilation_not_passed", &comp_np.to_string())?;
+        let _: bool = redis.hset(&key, "project_id", project_id.to_string())?;
+        let _: bool = redis.hset(&key, "compilation_passed", comp_p.to_string())?;
+        let _: bool = redis.hset(&key, "compilation_not_passed", comp_np.to_string())?;
         let _: bool = redis.hset(&key, "created_at", created_at)?;
         let _: i64 = redis.sadd(format!("test_run:by_project:{}", project_id), *id)?;
         eprintln!("  test_run {} (project {})", id, project_id);
@@ -111,14 +111,14 @@ fn main() -> anyhow::Result<()> {
 
     for (id, test_run_id, iteration, gas, result_type, npi, fd, ifs, created_at) in &trials {
         let key = format!("synthesis_trial:{}", id);
-        let _: bool = redis.hset(&key, "test_run_id", &test_run_id.to_string())?;
-        let _: bool = redis.hset(&key, "iteration", &iteration.to_string())?;
+        let _: bool = redis.hset(&key, "test_run_id", test_run_id.to_string())?;
+        let _: bool = redis.hset(&key, "iteration", iteration.to_string())?;
         let _: bool = redis.hset(&key, "result_type", result_type.as_str())?;
-        let _: bool = redis.hset(&key, "not_proved_invariants", &npi.to_string())?;
-        let _: bool = redis.hset(&key, "is_full_synthesis", &(*ifs as i32).to_string())?;
+        let _: bool = redis.hset(&key, "not_proved_invariants", npi.to_string())?;
+        let _: bool = redis.hset(&key, "is_full_synthesis", (*ifs as i32).to_string())?;
         let _: bool = redis.hset(&key, "created_at", created_at)?;
         if let Some(g) = gas {
-            let _: bool = redis.hset(&key, "gas_of_implementation", &g.to_string())?;
+            let _: bool = redis.hset(&key, "gas_of_implementation", g.to_string())?;
         }
         if let Some(detail) = fd {
             let _: bool = redis.hset(&key, "failure_detail", detail.as_str())?;

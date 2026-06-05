@@ -79,8 +79,8 @@ impl SynthesisPipeline {
         );
 
         #[cfg(test)]
-        if let Some(ref mut mocks) = self.mock_commands {
-            if !mocks.is_empty() {
+        if let Some(ref mut mocks) = self.mock_commands
+            && !mocks.is_empty() {
                 let remaining = mocks.len();
                 let result = mocks.remove(0);
                 eprintln!(
@@ -92,7 +92,6 @@ impl SynthesisPipeline {
                 );
                 return result;
             }
-        }
 
         let output = match Command::new(cmd).current_dir(cwd).args(args).output() {
             Ok(o) => o,
@@ -456,8 +455,8 @@ impl SynthesisPipeline {
         );
         for line in output.lines() {
             let lc = line.to_lowercase();
-            if lc.contains("unproved") || lc.contains("unproven") || lc.contains("not proved") {
-                if let Some(n) = line
+            if (lc.contains("unproved") || lc.contains("unproven") || lc.contains("not proved"))
+                && let Some(n) = line
                     .split(|c: char| c.is_whitespace() || c == ':')
                     .find_map(|w| w.trim().parse::<i32>().ok())
                 {
@@ -467,7 +466,6 @@ impl SynthesisPipeline {
                     );
                     return n;
                 }
-            }
         }
         // If halmos failed but we can't parse the count, assume all invariants are unproved
         eprintln!(
