@@ -23,10 +23,7 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    eprintln!(
-        "[MIGRATE] Opening SQLite: {}",
-        args.sqlite_path
-    );
+    eprintln!("[MIGRATE] Opening SQLite: {}", args.sqlite_path);
     let sqlite = Connection::open(&args.sqlite_path)?;
 
     eprintln!("[MIGRATE] Connecting to Redis: {}", args.redis_url);
@@ -35,9 +32,8 @@ fn main() -> anyhow::Result<()> {
 
     // --- Migrate projects ---
     eprintln!("[MIGRATE] Migrating projects...");
-    let mut stmt = sqlite.prepare(
-        "SELECT id, name, number_invariants, created_at FROM project ORDER BY id",
-    )?;
+    let mut stmt = sqlite
+        .prepare("SELECT id, name, number_invariants, created_at FROM project ORDER BY id")?;
     let projects: Vec<(i64, String, i32, String)> = stmt
         .query_map([], |row| {
             Ok((
@@ -99,7 +95,17 @@ fn main() -> anyhow::Result<()> {
         "SELECT id, test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at FROM synthesis_trial ORDER BY id",
     )?;
     #[allow(clippy::type_complexity)]
-    let trials: Vec<(i64, i64, i32, Option<i64>, String, i32, Option<String>, bool, String)> = stmt
+    let trials: Vec<(
+        i64,
+        i64,
+        i32,
+        Option<i64>,
+        String,
+        i32,
+        Option<String>,
+        bool,
+        String,
+    )> = stmt
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
@@ -141,10 +147,7 @@ fn main() -> anyhow::Result<()> {
         let pid_str: String = redis.hget(format!("test_run:{}", test_run_id), "project_id")?;
         let project_id: i64 = pid_str.parse().unwrap_or(0);
 
-        let _: i64 = redis.sadd(
-            format!("synthesis_trial:by_project:{}", project_id),
-            *id,
-        )?;
+        let _: i64 = redis.sadd(format!("synthesis_trial:by_project:{}", project_id), *id)?;
         if let Some(g) = gas {
             let _: i64 = redis.zadd(
                 format!("synthesis_trial:gas:by_project:{}", project_id),
@@ -152,9 +155,15 @@ fn main() -> anyhow::Result<()> {
                 *g as f64,
             )?;
         }
-        eprintln!("  trial {} (test_run {}, iteration {})", id, test_run_id, iteration);
+        eprintln!(
+            "  trial {} (test_run {}, iteration {})",
+            id, test_run_id, iteration
+        );
     }
-    let max_trial_id = trials.last().map(|(id, _, _, _, _, _, _, _, _)| *id).unwrap_or(0);
+    let max_trial_id = trials
+        .last()
+        .map(|(id, _, _, _, _, _, _, _, _)| *id)
+        .unwrap_or(0);
     let _: () = redis.set("synthesis_trial:ids", max_trial_id)?;
     eprintln!("  -> synthesis_trial:ids initialized to {}", max_trial_id);
 

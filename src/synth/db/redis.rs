@@ -1,7 +1,9 @@
-use chrono::Utc;
 use ::redis::Commands;
+use chrono::Utc;
 
-use crate::synth::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
+use crate::synth::db::{
+    Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params,
+};
 
 pub struct RedisDatabase {
     pub client: redis::Client,
@@ -36,7 +38,10 @@ impl Database for RedisDatabase {
                 let stored_name: String = conn.hget(&project_key, "name")?;
                 let inv_str: String = conn.hget(&project_key, "number_invariants")?;
                 let inv = inv_str.parse::<i32>().unwrap_or(0);
-                eprintln!("[DEBUG] RedisDatabase::get_or_create_project::found id={}", id);
+                eprintln!(
+                    "[DEBUG] RedisDatabase::get_or_create_project::found id={}",
+                    id
+                );
                 Ok(Project {
                     id,
                     name: stored_name,
@@ -55,7 +60,10 @@ impl Database for RedisDatabase {
                 )?;
                 let _: bool = conn.hset(&project_key, "created_at", &now)?;
                 let _: () = conn.set(&name_key, id)?;
-                eprintln!("[DEBUG] RedisDatabase::get_or_create_project::created id={}", id);
+                eprintln!(
+                    "[DEBUG] RedisDatabase::get_or_create_project::created id={}",
+                    id
+                );
                 Ok(Project {
                     id,
                     name: name.to_string(),
@@ -66,7 +74,10 @@ impl Database for RedisDatabase {
     }
 
     fn create_test_run(&self, project_id: i64) -> Result<TestRun, DbError> {
-        eprintln!("[DEBUG] RedisDatabase::create_test_run project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] RedisDatabase::create_test_run project_id={}",
+            project_id
+        );
         let mut conn = self.client.get_connection()?;
         let id: i64 = conn.incr("test_run:ids", 1)?;
         let key = format!("test_run:{}", id);
@@ -107,7 +118,11 @@ impl Database for RedisDatabase {
             is_full_synthesis
         );
 
-        validate_trial_params(result_type, not_proved_invariants, project_number_invariants)?;
+        validate_trial_params(
+            result_type,
+            not_proved_invariants,
+            project_number_invariants,
+        )?;
 
         let mut conn = self.client.get_connection()?;
         let id: i64 = conn.incr("synthesis_trial:ids", 1)?;
@@ -145,10 +160,7 @@ impl Database for RedisDatabase {
         let pid_str: String = conn.hget(&tr_key, "project_id")?;
         let project_id: i64 = pid_str.parse().unwrap_or(0);
 
-        let _: i64 = conn.sadd(
-            format!("synthesis_trial:by_project:{}", project_id),
-            id,
-        )?;
+        let _: i64 = conn.sadd(format!("synthesis_trial:by_project:{}", project_id), id)?;
         if let Some(gas) = gas_of_implementation {
             let _: i64 = conn.zadd(
                 format!("synthesis_trial:gas:by_project:{}", project_id),
@@ -192,8 +204,7 @@ impl Database for RedisDatabase {
             test_run_id
         );
         let mut conn = self.client.get_connection()?;
-        let _: i64 =
-            conn.hincr(format!("test_run:{}", test_run_id), "compilation_passed", 1)?;
+        let _: i64 = conn.hincr(format!("test_run:{}", test_run_id), "compilation_passed", 1)?;
         Ok(())
     }
 
@@ -212,7 +223,10 @@ impl Database for RedisDatabase {
     }
 
     fn get_project(&self, project_id: i64) -> Result<Project, DbError> {
-        eprintln!("[DEBUG] RedisDatabase::get_project project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] RedisDatabase::get_project project_id={}",
+            project_id
+        );
         let mut conn = self.client.get_connection()?;
         let key = format!("project:{}", project_id);
         let name: String = conn.hget(&key, "name")?;
@@ -230,7 +244,10 @@ impl Database for RedisDatabase {
     }
 
     fn get_metrics(&self, project_id: i64) -> Result<Metrics, DbError> {
-        eprintln!("[DEBUG] RedisDatabase::get_metrics project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] RedisDatabase::get_metrics project_id={}",
+            project_id
+        );
         let mut conn = self.client.get_connection()?;
 
         let gas_key = format!("synthesis_trial:gas:by_project:{}", project_id);
@@ -249,15 +266,12 @@ impl Database for RedisDatabase {
             }
         };
 
-        let tr_ids: Vec<String> =
-            conn.smembers(format!("test_run:by_project:{}", project_id))?;
+        let tr_ids: Vec<String> = conn.smembers(format!("test_run:by_project:{}", project_id))?;
         let mut comp_passed: i32 = 0;
         let mut comp_not_passed: i32 = 0;
         for tid_str in &tr_ids {
             let tr_key = format!("test_run:{}", tid_str);
-            let p: String = conn
-                .hget(&tr_key, "compilation_passed")
-                .unwrap_or_default();
+            let p: String = conn.hget(&tr_key, "compilation_passed").unwrap_or_default();
             let np: String = conn
                 .hget(&tr_key, "compilation_not_passed")
                 .unwrap_or_default();
@@ -301,9 +315,7 @@ impl Database for RedisDatabase {
                 let npi = npi_str.parse::<i32>().unwrap_or(0);
                 unproven += npi;
 
-                let iter_str: String = conn
-                    .hget(&trial_key, "iteration")
-                    .unwrap_or_default();
+                let iter_str: String = conn.hget(&trial_key, "iteration").unwrap_or_default();
                 let iter = iter_str.parse::<i32>().unwrap_or(0);
                 if min_succeeded_iter.is_none() || iter < min_succeeded_iter.unwrap() {
                     min_succeeded_iter = Some(iter);

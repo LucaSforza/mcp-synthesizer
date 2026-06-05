@@ -1,7 +1,8 @@
-#[path = "../synth/mod.rs"] mod synth;
+#[path = "../synth/mod.rs"]
+mod synth;
 
 use clap::Parser;
-use rmcp::{transport::stdio, ServiceExt};
+use rmcp::{ServiceExt, transport::stdio};
 
 use synth::db::DbConfig;
 use synth::tools::SynthesisTools;
@@ -40,10 +41,14 @@ async fn main() -> anyhow::Result<()> {
 
     let db_config = match args.db_type.as_str() {
         "redis" => DbConfig::Redis {
-            url: args.redis_url.unwrap_or_else(|| "redis://localhost:6379".into()),
+            url: args
+                .redis_url
+                .unwrap_or_else(|| "redis://localhost:6379".into()),
         },
         "sqlite" => {
-            eprintln!("[WARN] --db-type sqlite is deprecated and will be removed. Use --db-type redis instead.");
+            eprintln!(
+                "[WARN] --db-type sqlite is deprecated and will be removed. Use --db-type redis instead."
+            );
             #[allow(deprecated)]
             DbConfig::Sqlite {
                 path: args.db_path.unwrap_or_else(|| {
@@ -51,10 +56,8 @@ async fn main() -> anyhow::Result<()> {
                     format!("{}/Documents/solidity-synthesis.db", home)
                 }),
             }
-        },
-        other => anyhow::bail!(
-            "Unsupported db_type '{}'. Supported: redis, sqlite", other,
-        ),
+        }
+        other => anyhow::bail!("Unsupported db_type '{}'. Supported: redis, sqlite", other,),
     };
 
     eprintln!(

@@ -41,8 +41,14 @@ fn test_record_trial_failed_compilation() {
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
         .record_trial(
-            tr.id, 1, None, "failed_compilation", 0, Some("err"),
-            proj.number_invariants, false,
+            tr.id,
+            1,
+            None,
+            "failed_compilation",
+            0,
+            Some("err"),
+            proj.number_invariants,
+            false,
         )
         .unwrap();
     assert_eq!(trial.test_run_id, tr.id);
@@ -60,8 +66,14 @@ fn test_record_trial_succeeded_full() {
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
         .record_trial(
-            tr.id, 1, Some(50000), "succeeded_full", 0, None,
-            proj.number_invariants, true,
+            tr.id,
+            1,
+            Some(50000),
+            "succeeded_full",
+            0,
+            None,
+            proj.number_invariants,
+            true,
         )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_full");
@@ -78,8 +90,14 @@ fn test_record_trial_succeeded_partial() {
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
         .record_trial(
-            tr.id, 1, Some(30000), "succeeded_partial", 2, None,
-            proj.number_invariants, false,
+            tr.id,
+            1,
+            Some(30000),
+            "succeeded_partial",
+            2,
+            None,
+            proj.number_invariants,
+            false,
         )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_partial");
@@ -93,8 +111,14 @@ fn test_record_trial_fuzzing_only() {
     let tr = db.create_test_run(proj.id).unwrap();
     let trial = db
         .record_trial(
-            tr.id, 1, None, "succeeded_fuzzing", 0, None,
-            proj.number_invariants, false,
+            tr.id,
+            1,
+            None,
+            "succeeded_fuzzing",
+            0,
+            None,
+            proj.number_invariants,
+            false,
         )
         .unwrap();
     assert_eq!(trial.result_type, "succeeded_fuzzing");
@@ -110,8 +134,14 @@ fn test_invariants_constraint() {
     let proj = db.get_or_create_project("p", 3).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
     db.record_trial(
-        tr.id, 1, None, "succeeded_partial", 5, None,
-        proj.number_invariants, false,
+        tr.id,
+        1,
+        None,
+        "succeeded_partial",
+        5,
+        None,
+        proj.number_invariants,
+        false,
     )
     .unwrap();
 }
@@ -165,16 +195,28 @@ fn test_get_metrics_aggregation() {
     db.increment_compilation_passed(tr1.id).unwrap();
     db.increment_compilation_not_passed(tr1.id).unwrap();
     db.record_trial(
-        tr1.id, 1, None, "failed_compilation", 0, Some("err"), 5, false,
+        tr1.id,
+        1,
+        None,
+        "failed_compilation",
+        0,
+        Some("err"),
+        5,
+        false,
     )
     .unwrap();
 
+    db.record_trial(tr2.id, 1, Some(100000), "succeeded_full", 0, None, 5, false)
+        .unwrap();
     db.record_trial(
-        tr2.id, 1, Some(100000), "succeeded_full", 0, None, 5, false,
-    )
-    .unwrap();
-    db.record_trial(
-        tr2.id, 2, Some(90000), "succeeded_partial", 2, None, 5, false,
+        tr2.id,
+        2,
+        Some(90000),
+        "succeeded_partial",
+        2,
+        None,
+        5,
+        false,
     )
     .unwrap();
 
@@ -206,18 +248,21 @@ fn test_get_max_iteration_with_trials() {
     let tr2 = db.create_test_run(proj.id).unwrap();
 
     db.record_trial(
-        tr1.id, 1, None, "failed_compilation", 0, Some("err"), 3, false,
+        tr1.id,
+        1,
+        None,
+        "failed_compilation",
+        0,
+        Some("err"),
+        3,
+        false,
     )
     .unwrap();
-    db.record_trial(
-        tr1.id, 2, Some(50000), "succeeded_full", 0, None, 3, false,
-    )
-    .unwrap();
+    db.record_trial(tr1.id, 2, Some(50000), "succeeded_full", 0, None, 3, false)
+        .unwrap();
 
-    db.record_trial(
-        tr2.id, 5, None, "failed_fuzzing", 0, Some("fail"), 3, false,
-    )
-    .unwrap();
+    db.record_trial(tr2.id, 5, None, "failed_fuzzing", 0, Some("fail"), 3, false)
+        .unwrap();
 
     assert_eq!(db.get_max_iteration(tr1.id).unwrap(), 2);
     assert_eq!(db.get_max_iteration(tr2.id).unwrap(), 5);
@@ -228,8 +273,6 @@ fn test_result_type_check_constraint() {
     let db = setup_db();
     let proj = db.get_or_create_project("p", 1).unwrap();
     let tr = db.create_test_run(proj.id).unwrap();
-    let result = db.record_trial(
-        tr.id, 1, None, "invalid_type", 0, None, 1, false,
-    );
+    let result = db.record_trial(tr.id, 1, None, "invalid_type", 0, None, 1, false);
     assert!(result.is_err());
 }

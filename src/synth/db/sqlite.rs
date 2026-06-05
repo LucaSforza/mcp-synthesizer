@@ -1,6 +1,8 @@
-use rusqlite::{params, Connection as SqliteConnection};
+use rusqlite::{Connection as SqliteConnection, params};
 
-use crate::synth::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
+use crate::synth::db::{
+    Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params,
+};
 
 #[deprecated(note = "SQLite backend is deprecated. Use --db-type redis instead.")]
 pub struct SqliteDatabase {
@@ -69,7 +71,9 @@ impl SqliteDatabase {
             [],
         );
         if check_ok.is_err() {
-            eprintln!("[DEBUG] SqliteDatabase::run_migrations recreate_table=old_check_constraint_detected");
+            eprintln!(
+                "[DEBUG] SqliteDatabase::run_migrations recreate_table=old_check_constraint_detected"
+            );
             self.conn.execute_batch(
                 "ALTER TABLE synthesis_trial RENAME TO synthesis_trial_old;
 
@@ -99,7 +103,9 @@ impl SqliteDatabase {
                 .execute("DELETE FROM synthesis_trial WHERE test_run_id = -999", [])?;
         }
 
-        eprintln!("[DEBUG] SqliteDatabase::run_migrations::ok tables=[project,test_run,synthesis_trial]");
+        eprintln!(
+            "[DEBUG] SqliteDatabase::run_migrations::ok tables=[project,test_run,synthesis_trial]"
+        );
         Ok(())
     }
 }
@@ -129,7 +135,10 @@ impl Database for SqliteDatabase {
 
         match existing {
             Ok(project) => {
-                eprintln!("[DEBUG] SqliteDatabase::get_or_create_project::found id={}", project.id);
+                eprintln!(
+                    "[DEBUG] SqliteDatabase::get_or_create_project::found id={}",
+                    project.id
+                );
                 Ok(project)
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -138,7 +147,10 @@ impl Database for SqliteDatabase {
                     params![name, number_invariants],
                 )?;
                 let id = self.conn.last_insert_rowid();
-                eprintln!("[DEBUG] SqliteDatabase::get_or_create_project::created id={}", id);
+                eprintln!(
+                    "[DEBUG] SqliteDatabase::get_or_create_project::created id={}",
+                    id
+                );
                 Ok(Project {
                     id,
                     name: name.to_string(),
@@ -146,14 +158,20 @@ impl Database for SqliteDatabase {
                 })
             }
             Err(e) => {
-                eprintln!("[DEBUG] SqliteDatabase::get_or_create_project::err error=\"{}\"", e);
+                eprintln!(
+                    "[DEBUG] SqliteDatabase::get_or_create_project::err error=\"{}\"",
+                    e
+                );
                 Err(DbError::Sqlite(e))
             }
         }
     }
 
     fn create_test_run(&self, project_id: i64) -> Result<TestRun, DbError> {
-        eprintln!("[DEBUG] SqliteDatabase::create_test_run project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] SqliteDatabase::create_test_run project_id={}",
+            project_id
+        );
         self.conn.execute(
             "INSERT INTO test_run (project_id) VALUES (?1)",
             params![project_id],
@@ -190,7 +208,11 @@ impl Database for SqliteDatabase {
             is_full_synthesis
         );
 
-        validate_trial_params(result_type, not_proved_invariants, project_number_invariants)?;
+        validate_trial_params(
+            result_type,
+            not_proved_invariants,
+            project_number_invariants,
+        )?;
 
         self.conn.execute(
             "INSERT INTO synthesis_trial (test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -258,7 +280,10 @@ impl Database for SqliteDatabase {
     }
 
     fn get_project(&self, project_id: i64) -> Result<Project, DbError> {
-        eprintln!("[DEBUG] SqliteDatabase::get_project project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] SqliteDatabase::get_project project_id={}",
+            project_id
+        );
         let result = self.conn.query_row(
             "SELECT id, name, number_invariants FROM project WHERE id = ?1",
             params![project_id],
@@ -281,7 +306,10 @@ impl Database for SqliteDatabase {
     }
 
     fn get_metrics(&self, project_id: i64) -> Result<Metrics, DbError> {
-        eprintln!("[DEBUG] SqliteDatabase::get_metrics project_id={}", project_id);
+        eprintln!(
+            "[DEBUG] SqliteDatabase::get_metrics project_id={}",
+            project_id
+        );
         let _project = self.get_project(project_id)?;
 
         let peak_gas: Option<i64> = self.conn.query_row(

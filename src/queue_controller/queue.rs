@@ -3,7 +3,7 @@
 //! Reads jobs from Redis sorted set `cluster_runs` (priority queue).
 //! Each entry references a Redis hash with job metadata.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use redis::Commands;
 use std::collections::HashMap;
 
@@ -56,9 +56,7 @@ impl QueueClient {
     /// Check if latest synthesis trial for project was `succeeded_full`.
     pub fn check_succeeded_full(&mut self, project_name: &str) -> Result<bool> {
         let pid_key = format!("project:name:{project_name}");
-        let project_id: Option<String> = redis::cmd("GET")
-            .arg(&pid_key)
-            .query(&mut self.conn)?;
+        let project_id: Option<String> = redis::cmd("GET").arg(&pid_key).query(&mut self.conn)?;
         let project_id = match project_id {
             Some(id) => id,
             None => return Ok(false),
@@ -68,7 +66,11 @@ impl QueueClient {
             .arg(format!("synthesis_trial:by_project:{project_id}"))
             .query(&mut self.conn)?;
 
-        let max_id = match trial_ids.iter().filter_map(|id| id.parse::<i64>().ok()).max() {
+        let max_id = match trial_ids
+            .iter()
+            .filter_map(|id| id.parse::<i64>().ok())
+            .max()
+        {
             Some(id) => id,
             None => return Ok(false),
         };

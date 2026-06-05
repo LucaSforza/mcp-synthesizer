@@ -4,7 +4,7 @@
 //! queue controller. Uses deterministic RNG so same seed always
 //! produces same job sequence.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use rand_chacha::ChaCha8Rng;
 use rand_core::{RngCore, SeedableRng};
@@ -71,8 +71,12 @@ fn run() -> Result<u32> {
     if args.iterations == 0 {
         bail!("--iterations must be > 0");
     }
-    let prompt = std::fs::read_to_string(&args.prompt_file)
-        .with_context(|| format!("failed to read --prompt-file '{}'", args.prompt_file.display()))?;
+    let prompt = std::fs::read_to_string(&args.prompt_file).with_context(|| {
+        format!(
+            "failed to read --prompt-file '{}'",
+            args.prompt_file.display()
+        )
+    })?;
     if prompt.trim().is_empty() {
         bail!("prompt file '{}' is empty", args.prompt_file.display());
     }
@@ -80,7 +84,9 @@ fn run() -> Result<u32> {
     // ---- Redis connection ----
     let client = redis::Client::open(args.redis_url.as_str())
         .with_context(|| format!("failed to open Redis at {}", args.redis_url))?;
-    let mut conn = client.get_connection().context("failed to connect to Redis")?;
+    let mut conn = client
+        .get_connection()
+        .context("failed to connect to Redis")?;
 
     // ---- deterministic RNG ----
     let mut rng = ChaCha8Rng::seed_from_u64(args.seed);

@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use rmcp::{tool, tool_router};
 
 use crate::synth::db::{Database, DbConfig};
-use crate::synth::pipeline::{extract_forge_gas_json, SynthesisPipeline};
+use crate::synth::pipeline::{SynthesisPipeline, extract_forge_gas_json};
 
 pub struct SynthesisTools {
     pub cwd: String,
@@ -233,7 +233,8 @@ impl SynthesisTools {
             *pipe_lock = Some(
                 SynthesisPipeline::new(
                     self.cwd.clone(),
-                    self.db_config.connect()
+                    self.db_config
+                        .connect()
                         .map_err(|e| format!("Failed to open DB: {}", e))?,
                     self.project_id,
                     self.project_name.clone(),

@@ -5,7 +5,7 @@
 //!
 //! Uses git2 + auth-git2 — no shelling out to `git` CLI.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use git2::{BranchType, Repository};
 use std::path::{Path, PathBuf};
 
@@ -41,7 +41,10 @@ impl GitPersistence {
             .add_ssh_key_from_file(&auth_config.ssh_private_key, None as Option<String>);
 
         eprintln!("[DEBUG] Git: configured SSH authentication");
-        Ok(Self { repo, authenticator })
+        Ok(Self {
+            repo,
+            authenticator,
+        })
     }
 
     /// Phase 1 — create synthesis branch and checkout (run BEFORE Claude Code).
@@ -90,7 +93,11 @@ impl GitPersistence {
         eprintln!("[DEBUG] Git: creating synthesis branch '{branch_name}'");
 
         // -- Step 3: Check for branch conflict (fail-fast) --------------------
-        if self.repo.find_branch(&branch_name, BranchType::Local).is_ok() {
+        if self
+            .repo
+            .find_branch(&branch_name, BranchType::Local)
+            .is_ok()
+        {
             bail!("branch already exists: {branch_name}");
         }
 
@@ -215,12 +222,14 @@ impl GitPersistence {
             .context("remote 'origin' has no URL")?
             .to_string();
         if !remote_url.starts_with("git@") && !remote_url.starts_with("ssh://") {
-            bail!("remote 'origin' URL is not an SSH remote: expected git@ or ssh://, got {remote_url:?}");
+            bail!(
+                "remote 'origin' URL is not an SSH remote: expected git@ or ssh://, got {remote_url:?}"
+            );
         }
 
         // Build credentials callback from auth-git2.
-        let git_config = git2::Config::open_default()
-            .context("failed to open git config for authentication")?;
+        let git_config =
+            git2::Config::open_default().context("failed to open git config for authentication")?;
         let mut push_callbacks = git2::RemoteCallbacks::new();
         push_callbacks.credentials(self.authenticator.credentials(&git_config));
 
@@ -242,9 +251,7 @@ impl GitPersistence {
         branch
             .set_upstream(Some(upstream.as_str()))
             .with_context(|| format!("failed to set upstream tracking for '{branch_name}'"))?;
-        eprintln!(
-            "[DEBUG] Git: upstream tracking set: '{branch_name}' -> 'origin/{branch_name}'"
-        );
+        eprintln!("[DEBUG] Git: upstream tracking set: '{branch_name}' -> 'origin/{branch_name}'");
 
         Ok(())
     }

@@ -80,18 +80,19 @@ impl SynthesisPipeline {
 
         #[cfg(test)]
         if let Some(ref mut mocks) = self.mock_commands
-            && !mocks.is_empty() {
-                let remaining = mocks.len();
-                let result = mocks.remove(0);
-                eprintln!(
-                    "[DEBUG] pipeline::run_command::mock cmd=\"{}\" args={:?} mocks_remaining={} result_is_ok={}",
-                    cmd,
-                    args,
-                    remaining - 1,
-                    result.is_ok()
-                );
-                return result;
-            }
+            && !mocks.is_empty()
+        {
+            let remaining = mocks.len();
+            let result = mocks.remove(0);
+            eprintln!(
+                "[DEBUG] pipeline::run_command::mock cmd=\"{}\" args={:?} mocks_remaining={} result_is_ok={}",
+                cmd,
+                args,
+                remaining - 1,
+                result.is_ok()
+            );
+            return result;
+        }
 
         let output = match Command::new(cmd).current_dir(cwd).args(args).output() {
             Ok(o) => o,
@@ -459,13 +460,13 @@ impl SynthesisPipeline {
                 && let Some(n) = line
                     .split(|c: char| c.is_whitespace() || c == ':')
                     .find_map(|w| w.trim().parse::<i32>().ok())
-                {
-                    eprintln!(
-                        "[DEBUG] pipeline::extract_not_proved::result not_proved={} (parsed)",
-                        n
-                    );
-                    return n;
-                }
+            {
+                eprintln!(
+                    "[DEBUG] pipeline::extract_not_proved::result not_proved={} (parsed)",
+                    n
+                );
+                return n;
+            }
         }
         // If halmos failed but we can't parse the count, assume all invariants are unproved
         eprintln!(

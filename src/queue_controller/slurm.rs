@@ -1,6 +1,6 @@
 //! Sbatch generation and Slurm interaction via SSH.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
@@ -201,7 +201,9 @@ fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
     if stdout.is_empty() {
         return Ok(JobState::NotFound);
     }
-    stdout.parse::<JobState>().map_err(|e| anyhow::anyhow!("{e}"))
+    stdout
+        .parse::<JobState>()
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Handle for SSH port forwarding tunnel. Kills tunnel on drop.
@@ -261,7 +263,11 @@ pub fn get_job_node(cluster_host: &str, job_id: &str) -> Result<String> {
 /// Convert node hostname to IP using convention: `node123` → `10.0.0.23`.
 pub fn node_name_to_ip(node_name: &str) -> String {
     let digits: String = node_name.chars().filter(|c| c.is_ascii_digit()).collect();
-    let suffix = if digits.len() > 2 { &digits[digits.len() - 2..] } else { &digits };
+    let suffix = if digits.len() > 2 {
+        &digits[digits.len() - 2..]
+    } else {
+        &digits
+    };
     format!("10.0.0.{}", suffix)
 }
 

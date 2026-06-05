@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
-use std::fmt;
 use std::error::Error as StdError;
-
+use std::fmt;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -130,7 +129,8 @@ pub(crate) fn validate_trial_params(
 // ---------------------------------------------------------------------------
 
 pub trait Database: Send {
-    fn get_or_create_project(&self, name: &str, number_invariants: i32) -> Result<Project, DbError>;
+    fn get_or_create_project(&self, name: &str, number_invariants: i32)
+    -> Result<Project, DbError>;
     fn create_test_run(&self, project_id: i64) -> Result<TestRun, DbError>;
     #[allow(clippy::too_many_arguments)]
     fn record_trial(
@@ -157,9 +157,13 @@ pub trait Database: Send {
 
 #[derive(Clone, Debug)]
 pub enum DbConfig {
-    Redis { url: String },
+    Redis {
+        url: String,
+    },
     #[deprecated(note = "SQLite backend is deprecated. Use Redis instead.")]
-    Sqlite { path: String },
+    Sqlite {
+        path: String,
+    },
 }
 
 impl DbConfig {
