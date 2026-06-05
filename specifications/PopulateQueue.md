@@ -194,8 +194,7 @@ Hash contents:
 {
     seed: "<generated_seed>",
     project: "<project>",
-    prompt: "<prompt>",
-    model_name: "<model_name>"
+    prompt: "<prompt>"
 }
 ```
 
@@ -205,10 +204,11 @@ Example:
 qwen3-solidity-27B-Q6_K.gguf:1 -> {
     seed: "183746192",
     project: "my-project",
-    prompt: "...",
-    model_name: "qwen3-solidity-27B-Q6_K.gguf"
+    prompt: "..."
 }
 ```
+
+`model_name` is **not** stored in the hash. It is encoded in the key `{model_name}:{i}`. The queue controller extracts it from the key when loading job metadata.
 
 ---
 
@@ -265,7 +265,6 @@ for i in 1..=iterations:
         seed = generated_seed
         project = project
         prompt = prompt
-        model_name = model_name
     }
 
     ZADD cluster_runs i job_key
@@ -393,10 +392,10 @@ The task is complete when:
 2. A deterministic sequence of seeds is generated.
 3. One Redis hash is created per generated seed.
 4. Each hash contains:
-   - seed
-   - project
-   - prompt
-   - model_name
+	   - seed
+	   - project
+	   - prompt
+	   (model_name is in key `{model}:{i}`, not in hash)
 5. Each job is inserted into `cluster_runs`.
 6. Queue priority equals the iteration index.
 7. The queue controller can immediately consume the generated jobs.

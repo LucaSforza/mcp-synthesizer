@@ -1,399 +1,358 @@
-# Task Specification: Automated Synthesis Queue Controller
+# Specification: Queue Controller
 
-## Goal
+## Overview
 
-Implement a new binary that automates synthesis execution on a Slurm cluster.
+Binary that automates Solidity synthesis execution on a Slurm cluster.
 
-Today synthesis execution requires:
+Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model serving (llama.cpp), establishes SSH tunnel to compute node, launches Claude Code with MCP integration. Processes jobs sequentially until queue empty.
 
-1. Manually launching Claude Code.
-2. Manually selecting the model.
-3. Manually providing the synthesis prompt.
-4. Waiting for completion before starting the next synthesis.
-
-The objective is to automate this workflow and allow multiple synthesis requests to be executed sequentially through a Redis-backed priority queue.
+**Binary name:** `queue_controller`
+**Source:** `src/bin/queue_controller.rs` → `src/queue_controller/{mod,claude,slurm,queue}.rs`
 
 ---
 
-# High Level Architecture
+## Architecture
 
-Create a new binary (separate from the existing MCP server) acting as a **queue controller**.
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+│   Redis     │◄────│  Controller  │────►│  Slurm Cluster   │
+│ cluster_runs│     │  (local)     │     │  ┌───────────┐  │
+│ job hashes  │     │              │     │  │llama-server│  │
+└─────────────┘     │ peek + ZREM  │     │  │ (GGUF)    │  │
+                    │ on success   │     │  └─────┬─────┘  │
+                    │              │     │        │ port    │
+                    │  SSH tunnel  │◄────│────────┘ 8080    │
+                    │  (local)     │     └─────────────────┘
+                    │       │
+                    │  launches
+                    │       │
+                    │  ┌────▼──────────┐
+                    │  │  Claude Code  │
+                    │  │  + mcp_synth  │
+                    │  └───────────────┘
+                    └──────────────────────
+```
 
-Responsibilities:
-
-1. Read synthesis jobs from Redis.
-2. Submit jobs to the Slurm cluster.
-3. Monitor execution status.
-4. Launch Claude Code once the model server is available.
-5. Process jobs sequentially.
-6. Stop when the queue becomes empty.
-
-Only one synthesis should run at a time.
+Single-threaded. One job at a time. Fail-fast on error.
 
 ---
 
-# Redis Data Model
+## Redis Data Model
 
-## Queue
+### Priority Queue
 
-Use a Redis Sorted Set as a priority queue.
-
-Key:
-
-```text
-cluster_runs
+```
+key: cluster_runs
+type: Sorted Set
+member format: {model_name}:{job_id}
+score (priority): higher = higher priority
 ```
 
 Example:
 
-```text
-(
-    model_a:job_1, priority=100
-)
-(
-    model_b:job_2, priority=50
-)
-(
-    model_c:job_3, priority=10
-)
+```
+ZADD cluster_runs 100 qwen3-solidity-27B-Q6_K.gguf:1
+ZADD cluster_runs  50 qwen3-solidity-27B-Q6_K.gguf:2
 ```
 
-Higher score = higher priority.
+### Job Metadata Hash
 
-The controller always pops the highest-priority job first.
-
----
-
-## Job Metadata
-
-Each queue entry references a Redis hash.
-
-Key:
-
-```text
-{model_name}:{job_id}
 ```
+key: {model_name}:{job_id}
+type: Hash
+fields:
+  - seed      (string, required) — llama.cpp random seed
+  - project   (string, required) — synthesis project name, maps to directory under --project-root
+  - prompt    (string, required) — synthesis prompt text for Claude Code
+```
+
+`model_name` is **not** stored in the hash. It is extracted from the queue member key (`{model_name}:{job_id}`).
 
 Example:
 
-```text
-qwen3-solidity-27B:123
+```
+HSET qwen3-solidity-27B-Q6_K.gguf:1 \
+  seed "183746192" \
+  project "my-project" \
+  prompt "Write a Solidity contract..."
 ```
 
-Hash contents:
+### Synthesis Results (read-only by controller)
 
-```text
+```
+key: project:name:{project_name}           → project ID
+key: project:{project_id}                  → Hash { name, number_invariants, created_at }
+key: synthesis_trial:by_project:{pid}      → Set of trial_ids
+key: synthesis_trial:{max_id}              → Hash { result_type, ... }
+```
+
+Controller checks `result_type == "succeeded_full"` to decide whether to remove job from queue.
+
+---
+
+## Processing Flow
+
+### 1. Peek Job
+
+```
+ZREVRANGE cluster_runs 0 0 WITHSCORES
+```
+
+Read highest-priority job. **Do not remove** — removal happens only on successful completion.
+
+If queue empty → exit with success.
+
+### 2. Parse Member
+
+Member format: `{model_name}:{job_id}`
+
+Use `rsplitn(2, ':')` because model names may contain colons (e.g. `Qwen3:27B-Q6_K.gguf:1`).
+
+### 3. Load Job Metadata
+
+```
+HGETALL {model_name}:{job_id}
+```
+
+Extract `seed`, `project`, `prompt`. Validate all exist.
+
+If missing → fatal error, controller terminates. Job stays in queue.
+
+### 4. Construct Model Path
+
+```
+{models_path}/{model_name}
+```
+
+Where `--models-path` is a CLI flag (base directory of GGUF models on the cluster).
+
+### 5. Generate sbatch and Submit via SSH
+
+Generate sbatch script with model path, llama-server path, and seed as parameters. Everything else hardcoded.
+
+Pipe content via stdin to:
+
+```
+ssh cluster sbatch
+```
+
+No temporary file on disk.
+
+llama-server flags in sbatch:
+
+```
+--model MODEL_PATH
+--seed SEED
+--models-max 1
+-t 8
+-ngl 99
+-c 256000
+--host 0.0.0.0
+--cache-reuse 256
+--temp 0.6
+--top-p 0.95
+--top-k 20
+--min-p 0.0
+--presence-penalty 0.0
+--repeat-penalty 1.0
+```
+
+### 6. Poll Until RUNNING
+
+```
+ssh cluster squeue --job JOB_ID --noheader --format %T
+```
+
+Loop polling at configurable interval until state is one of:
+
+| State | Action |
+|---|---|
+| RUNNING | Continue to step 6b |
+| COMPLETED | Fatal (model server exited before use) |
+| FAILED | Fatal |
+| CANCELLED | Fatal |
+| TIMEOUT | Fatal |
+| PENDING / CONFIGURING / SUSPENDED / other | Retry |
+| Not found in squeue | Fatal (job disappeared) |
+
+Timeout configurable. If never reaches RUNNING → fatal.
+
+### 6b. Resolve Compute Node and Establish SSH Tunnel
+
+After job reaches RUNNING:
+
+1. Get compute node hostname: `ssh cluster squeue --job JOB_ID --format %N` (fallback: `sacct`)
+2. Convert node hostname to IP: last 2 digits of numeric suffix → `10.0.0.{digits}`
+   - Example: `node123` → `10.0.0.23`
+3. Establish SSH tunnel: `ssh -L PORT:10.0.0.XX:PORT cluster -N`
+   - Tunnel auto-closed on Drop (Rust Drop impl kills child process)
+
+### 7. Validate Project Directory
+
+```
+{project_root}/{job.project_name}
+```
+
+Must exist on local filesystem. If missing → fatal.
+
+### 8. Set Up Claude Code MCP Settings
+
+Inject `mcpServers` into `.claude/settings.local.json`:
+
+```json
 {
-    seed: "104",
-    project: "project-id",
-    prompt: "synthesis specification",
-    model_name: "qwen3-solidity-27B"
+  "mcpServers": {
+    "mcp_synth": {
+      "command": "mcp_synth",
+      "args": ["--cwd", "...", "--project", "...", "--db-type", "redis"],
+      "env": {}
+    }
+  }
 }
 ```
 
-### Required Fields
+Also write standalone `mcp_config.json` for `--mcp-config` flag.
 
-| Field | Description |
-|---------|-------------|
-| seed | llama.cpp seed |
-| project | synthesis project identifier |
-| prompt | synthesis instructions |
-| model_name | model filename identifier |
+**Backup:** existing `settings.local.json` saved to `settings.local.json.queue_backup`. If no existing file, `None` → cleanup removes injected file on restore.
 
----
+### 9. Kill Stale mcp_synth
 
-# Queue Processing Flow
-
-Assume jobs already exist in Redis.
-
-Controller workflow:
-
-## 1. Pop Job
-
-Remove the highest-priority entry from:
-
-```text
-cluster_runs
+```
+pkill -f mcp_synth
 ```
 
-If no job exists:
+Prevents port conflicts from parent Claude session's MCP server.
 
-```text
-Exit successfully.
+### 10. Launch Claude Code (blocking)
+
+```
+claude -p \
+  --output-format stream-json \
+  --dangerously-skip-permissions \
+  --include-hook-events \
+  --verbose \
+  --mcp-config {mcp_config.json} \
+  --strict-mcp-config \
+  "{prompt}"
 ```
 
----
+- `current_dir` set to project directory
+- Env overrides: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`, `ANTHROPIC_MODEL={model_name}`
+- stdout piped through `jq`, saved to `{model_name}_{job_id}.json` in project directory
+- stderr inherited (visible to operator)
+- stdin inherited (operator can interrupt)
 
-## 2. Load Job Metadata
+### 11. Restore Claude Settings
 
-Read the corresponding Redis hash.
+- Remove `mcp_config.json`
+- If backup exists: copy back, remove backup
+- If no backup (file was created by us): delete `settings.local.json`
 
-Extract:
+### 12. Check Synthesis Result
 
-- model_name
-- seed
-- project
-- prompt
+Query Redis for latest trial of this project:
 
-Validate that all required fields exist.
-
-If validation fails:
-
-```text
-Return error and terminate.
+```
+GET project:name:{project_name} → project_id
+SMEMBERS synthesis_trial:by_project:{project_id} → trial_ids
+max(trial_ids) → HGETALL → result_type
 ```
 
----
+If `result_type == "succeeded_full"`: `ZREM cluster_runs {member}` → job consumed.
 
-## 3. Construct Model Path
+Otherwise: **fatal error, job stays in queue**. Operator must inspect and decide.
 
-The executable receives a base model directory:
-
-```bash
---models-path ~/dll/llm/models
-```
-
-Example:
-
-```text
-model_name = Qwen3-Coder-Next-APEX-I-Compact.gguf
-```
-
-Generated path:
-
-```text
-~/dll/llm/models/Qwen3-Coder-Next-APEX-I-Compact.gguf
-```
-
----
-
-## 4. Submit Slurm Job
-
-Launch a Slurm job through SSH.
-
-Cluster SSH configuration already exists under:
-
-```text
-cluster
-```
-
-Submission pattern:
-
-```bash
-ssh cluster "sbatch generated_job.sbatch"
-```
-
-The controller must dynamically generate the sbatch file using values stored in Redis.
-
-At minimum, the following parameters must be configurable:
-
-- model path
-- seed
-
-Everything else remains hardcoded for now.
-
-Add a TODO comment for future sbatch parameterization.
-
----
-
-## 5. Wait Until Model Server Is Running
-
-After submission:
-
-1. Verify Slurm accepted the job.
-2. Poll Slurm status through SSH.
-3. Wait until the job reaches RUNNING state.
-
-Possible commands:
-
-```bash
-ssh cluster "squeue ..."
-```
-
-or
-
-```bash
-ssh cluster "sacct ..."
-```
-
-Implementation choice is up to the developer.
-
----
-
-## 6. Failure Handling
-
-If:
-
-- sbatch submission fails
-- job enters FAILED state
-- job exits unexpectedly
-- model server never becomes available
-
-Then:
-
-```text
-Terminate the controller with an error.
-```
-
-Do not continue with subsequent jobs.
-
----
-
-## 7. Launch Claude Code
-
-Once the model server is available:
-
-1. Start Claude Code.
-2. Configure MCP correctly.
-3. Ensure Claude can communicate with the existing MCP server.
-4. Pass the synthesis prompt from Redis.
-
-The synthesis should run exactly as if a user launched it manually.
-
----
-
-## 8. Wait For Completion
-
-Wait until Claude Code finishes.
-
-If synthesis fails:
-
-```text
-Return error.
-```
-
-Otherwise continue.
-
----
-
-## 9. Process Next Job
+### 13. Loop
 
 Repeat from step 1.
 
-When the queue becomes empty:
-
-```text
-Exit successfully.
-```
-
 ---
 
-# CLI Interface
+## CLI Interface
 
-Use `clap`.
-
-Required arguments:
-
-```bash
+```
 queue_controller \
     --models-path ~/dll/llm/models \
-    --project-root ~/dll/projects
+    --project-root ~/dll/projects \
+    [--redis-url redis://localhost:6379] \
+    [--model-url http://127.0.0.1:8080/v1] \
+    [--cluster-host cluster] \
+    [--poll-interval 30] \
+    [--poll-timeout 1800] \
+    [--tunnel-port 8080] \
+    [--llama-path /home/sforza_2050030/.local/bin/llama-server]
 ```
 
-## Arguments
+### Arguments
 
-### --models-path
-
-Base directory containing GGUF models.
-
-Example:
-
-```bash
---models-path ~/dll/llm/models
-```
-
-### --project-root
-
-Base directory containing synthesis projects.
-
-Example:
-
-```bash
---project-root ~/dll/projects
-```
-
-The controller uses the Redis `project` field to locate the correct project directory.
+| Flag | Default | Description |
+|---|---|---|
+| `--models-path` | (required) | Base dir of GGUF model files on cluster |
+| `--project-root` | (required) | Base dir of synthesis projects (local) |
+| `--redis-url` | `redis://localhost:6379` | Redis server URL |
+| `--model-url` | `http://127.0.0.1:8080/v1` | Model server API endpoint |
+| `--cluster-host` | `cluster` | SSH hostname for Slurm cluster |
+| `--poll-interval` | `30` | Seconds between Slurm status polls |
+| `--poll-timeout` | `1800` | Max seconds wait for RUNNING state |
+| `--tunnel-port` | `8080` | Port for SSH tunnel to compute node |
+| `--llama-path` | `/home/sforza_2050030/.local/bin/llama-server` | llama-server binary path on cluster |
 
 ---
 
-# Sbatch Template
+## Source Files
 
-Current reference configuration:
-
-```bash
-llama-server \
-    --model <MODEL_PATH> \
-    --seed <SEED> \
-    --models-max 1 \
-    -t 8 \
-    -ngl 99 \
-    -c 256000 \
-    --host 0.0.0.0 \
-    --cache-reuse 256 \
-    --temp 0.6 \
-    --top-p 0.95 \
-    --top-k 20 \
-    --min-p 0.0 \
-    --presence-penalty 0.0 \
-    --repeat-penalty 1.0
-```
-
-Only:
-
-```text
-MODEL_PATH
-SEED
-```
-
-must be parameterized.
-
-All other values remain fixed.
-
-TODO:
-
-```text
-Make all llama.cpp parameters configurable through Redis.
-```
+| File | Responsibility |
+|---|---|
+| `src/bin/queue_controller.rs` | Thin entrypoint, calls `app::run()`, exits with code 1 on error |
+| `src/queue_controller/mod.rs` | Main loop, orchestrator, CLI args |
+| `src/queue_controller/queue.rs` | Redis queue client: `peek_job`, `load_job`, `remove_job`, `check_succeeded_full` |
+| `src/queue_controller/slurm.rs` | Sbatch generation, submit via SSH, poll state, node resolution, SSH tunnel |
+| `src/queue_controller/claude.rs` | MCP config injection/restore, kill stale mcp_synth, launch Claude Code |
 
 ---
 
-# MCP Integration
+## Error Handling
 
-The existing MCP server already communicates with Redis.
+Strict fail-fast. Any error terminates the controller:
 
-Reuse the existing implementation.
+| Failure | Effect |
+|---|---|
+| Redis connection fails | Exit immediately |
+| Job metadata missing/empty | Exit immediately |
+| sbatch submission fails | Exit immediately |
+| Job enters FAILED/CANCELLED/TIMEOUT | Exit immediately |
+| Project directory not found | Exit immediately |
+| Claude Code exits non-zero | Exit immediately, job stays in queue |
+| Synthesis not `succeeded_full` | Exit immediately, job stays in queue |
 
-Requirements:
-
-1. Instantiate the MCP server correctly.
-2. Ensure Claude Code can connect to it.
-3. Reuse existing Redis configuration where possible.
-4. Avoid duplicating Redis access logic already implemented in the project.
-
----
-
-# Non-Goals
-
-Not required in this task:
-
-- Parallel execution.
-- Multiple simultaneous Slurm jobs.
-- Multiple concurrent Claude Code sessions.
-- Dynamic tuning of llama.cpp parameters.
-- Queue persistence outside Redis.
-- Distributed scheduling.
+No retry logic. No skip-to-next-job. Operator intervention required.
 
 ---
 
-# Success Criteria
+## Non-Goals
 
-The task is complete when:
+- Parallel execution (one job at a time)
+- Multiple simultaneous Slurm jobs
+- Multiple concurrent Claude Code sessions
+- Dynamic tuning of llama.cpp parameters
+- Queue persistence outside Redis
+- Distributed scheduling across multiple controllers
 
-1. Jobs can be inserted into `cluster_runs`.
-2. The controller pops jobs in priority order.
-3. The controller generates and submits Slurm jobs.
-4. The correct model is loaded.
-5. Claude Code receives the prompt automatically.
-6. Synthesis runs without manual intervention.
-7. Jobs execute sequentially until the queue is empty.
-8. Errors stop execution immediately.
+---
+
+## Dependencies
+
+- `redis` crate (pure Rust, no system dep)
+- `clap` for CLI
+- `serde_json` for settings file manipulation
+- `rand_chacha` / `rand_core` (only in companion `populate_queue` binary)
+- `anyhow` for error handling
+
+Runtime dependencies:
+- `ssh` client on PATH
+- Slurm cluster accessible via SSH host `cluster`
+- Redis server
+- `claude` CLI on PATH
+- `mcp_synth` binary on PATH
+- `llama-server` on cluster PATH
+- `pkill` for process management
