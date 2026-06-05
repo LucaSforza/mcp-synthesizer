@@ -218,6 +218,26 @@ cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:63
 
 Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model serving, launches Claude Code with MCP integration. Processes sequentially until queue empty.
 
+**Important architecture:** queue_controller runs **locally**. Model files and Slurm are on **cluster**. SSH tunnel forwards cluster compute node port to localhost so Claude Code (local) can reach the model server.
+
+**Test projects path (local):** `/home/softdream/Programming/gits/git_diff_checker/test/`
+- test2 at `/home/softdream/Programming/gits/git_diff_checker/test/test2`
+- test3, test4, test5 in same dir
+
+**Cluster access:** `ssh cluster` (configured in `~/.ssh/config`). Model files at `~/dll/llm/models/` on cluster. Project dirs on cluster filesystem too (NAS), but local copy needed for Claude Code to run.
+
+**Common commands on cluster:**
+```bash
+# Check Slurm queue
+ssh cluster squeue -u $USER
+
+# Check model files
+ssh cluster ls ~/dll/llm/models/
+
+# Submit interactive job
+ssh cluster srun --gpus=1 --mem=41G ...
+```
+
 **Queue Redis schema:**
 
 ```
@@ -234,16 +254,16 @@ cluster_runs                                         -> Sorted Set (member="{mod
 6. `squeue --format %N` → get compute node hostname → `node_name_to_ip` (last 2 digits)
 7. `ssh -L port:node_ip:port cluster -N` → SSH tunnel (auto-closed on Drop)
 8. Injects `mcpServers` into `.claude/settings.local.json` (preserves existing config)
-9. `claude -p --output-format json --mcp-config mcp_config.json --strict-mcp-config "prompt"` → blocking
+9. `claude -p --output-format stream-json --mcp-config mcp_config.json --strict-mcp-config "prompt"` → blocking
    - Overrides `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` env vars
-   - Captures output, pipes through `jq`, saves as `{model}_{id}.json`
+   - Captures output, saves as `{model}_{id}.json`
 10. Restore original settings.local.json from backup
 11. `check_succeeded_full()` → if true, ZREM removes job from queue; if false, bail (job stays)
 
 ```bash
 queue_controller \
     --models-path ~/dll/llm/models \
-    --project-root ~/dll/projects \
+    --project-root /home/softdream/Programming/gits/git_diff_checker/test \
     [--redis-url redis://localhost:6379] \
     [--model-url http://127.0.0.1:8080/v1] \
     [--cluster-host cluster] \
@@ -252,6 +272,8 @@ queue_controller \
     [--poll-interval 30] \
     [--poll-timeout 1800]
 ```
+
+**`--project-root`** must point to local dir containing project subdirs (e.g. `test2/`). Model is on cluster — `--models-path` is the cluster-side path embedded in sbatch script.
 
 Strict fail-fast: any error (Redis conn, sbatch fail, Slurm FAILED, Claude Code non-zero, trial not succeeded_full) terminates immediately. Job stays in queue on failure.
 
