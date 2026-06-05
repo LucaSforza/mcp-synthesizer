@@ -195,6 +195,7 @@ fn submit_slurm_job(
 /// from squeue, convert to IP, and establish an SSH port-forwarding tunnel.
 ///
 /// Returns a `TunnelHandle` whose `Drop` implementation closes the tunnel.
+/// IMPORTANT: So, it is dropped every loop.
 fn wait_and_create_tunnel(
     cluster_host: &str,
     slurm_job_id: &str,
