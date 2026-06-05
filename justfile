@@ -21,22 +21,29 @@ build:
     echo -e "\n--- VERIFYING DEPENDENCIES VIA READELF ---"
 
     
-# Install the binaries safely with md5sum checks
+# Install all binaries safely with md5sum checks
 install: build
     #!/usr/bin/env bash
+    set -e
     echo -e "\nBEGINNING INSTALL..."
     mkdir -p "{{ bin_dir }}"
 
-    # 1. Handle mcp_synth
-    SRC_GDC="{{ root_dir }}/target/release/mcp_synth"
-    DEST_GDC="{{ bin_dir }}/mcp_synth"
+    install_bin() {
+        local name="$1"
+        local src="{{ root_dir }}/target/release/$name"
+        local dst="{{ bin_dir }}/$name"
+        if [ -f "$dst" ] && [ "$(md5sum < "$src")" = "$(md5sum < "$dst")" ]; then
+            echo "$name is already up-to-date. Skipping."
+        else
+            cp "$src" "$dst"
+            echo "Installed/Updated $name"
+        fi
+    }
 
-    if [ -f "$DEST_GDC" ] && [ "$(md5sum < "$SRC_GDC")" = "$(md5sum < "$DEST_GDC")" ]; then
-        echo "mcp_synth is already up-to-date. Skipping."
-    else
-        cp "$SRC_GDC" "$DEST_GDC"
-        echo "Installed/Updated mcp_synth"
-    fi
+    install_bin mcp_synth
+    install_bin queue_controller
+    install_bin populate_queue
+    install_bin migrate
 
     echo "INSTALL COMPLETE!"
 
