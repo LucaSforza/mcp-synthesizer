@@ -1,11 +1,57 @@
 //! Sbatch generation and Slurm interaction via SSH.
 
 use anyhow::{bail, Context, Result};
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::str::FromStr;
 use std::thread::sleep;
 use std::time::Duration;
+
+/// Slurm job state from `squeue --format %T`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JobState {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Timeout,
+    Other(String),
+    NotFound,
+}
+
+impl FromStr for JobState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "PENDING" | "PENDING+" | "SUSPENDED" | "CONFIGURING" => Ok(JobState::Pending),
+            "RUNNING" => Ok(JobState::Running),
+            "COMPLETED" => Ok(JobState::Completed),
+            "FAILED" => Ok(JobState::Failed),
+            "CANCELLED" => Ok(JobState::Cancelled),
+            "TIMEOUT" => Ok(JobState::Timeout),
+            other => Ok(JobState::Other(other.to_string())),
+        }
+    }
+}
+
+impl fmt::Display for JobState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            JobState::Pending => write!(f, "PENDING"),
+            JobState::Running => write!(f, "RUNNING"),
+            JobState::Completed => write!(f, "COMPLETED"),
+            JobState::Failed => write!(f, "FAILED"),
+            JobState::Cancelled => write!(f, "CANCELLED"),
+            JobState::Timeout => write!(f, "TIMEOUT"),
+            JobState::Other(s) => write!(f, "{s}"),
+            JobState::NotFound => write!(f, "NOT_FOUND"),
+        }
+    }
+}
 
 /// Generate sbatch script content.
 /// Only MODEL_PATH, LLAMA_PATH and SEED are parameterized; everything else hardcoded.
@@ -102,31 +148,31 @@ pub fn poll_job(
 
     for attempt in 0..max_polls {
         let state = get_job_state(cluster_host, job_id)?;
-        match state.as_deref() {
-            Some("RUNNING") => {
+        match state {
+            JobState::Running => {
                 eprintln!("[DEBUG] Job {job_id} is RUNNING");
                 return Ok(());
             }
-            Some("COMPLETED") => {
+            JobState::Completed => {
                 bail!("job {job_id} already COMPLETED (model server exited early)");
             }
-            Some("FAILED") => {
+            JobState::Failed => {
                 bail!("job {job_id} entered FAILED state");
             }
-            Some("CANCELLED") => {
+            JobState::Cancelled => {
                 bail!("job {job_id} was CANCELLED");
             }
-            Some("TIMEOUT") => {
+            JobState::Timeout => {
                 bail!("job {job_id} timed out");
             }
-            Some(other) => {
+            JobState::NotFound => {
+                bail!("job {job_id} not found in squeue");
+            }
+            JobState::Pending | JobState::Other(_) => {
                 eprintln!(
-                    "[DEBUG] Job {job_id} state: {other} (attempt {})",
+                    "[DEBUG] Job {job_id} state: {state} (attempt {})",
                     attempt + 1
                 );
-            }
-            None => {
-                bail!("job {job_id} not found in squeue");
             }
         }
         sleep(Duration::from_secs(interval_secs));
@@ -136,7 +182,7 @@ pub fn poll_job(
 }
 
 /// Get single job state via squeue.
-fn get_job_state(cluster_host: &str, job_id: &str) -> Result<Option<String>> {
+fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
     let output = Command::new("ssh")
         .args([
             cluster_host,
@@ -154,10 +200,9 @@ fn get_job_state(cluster_host: &str, job_id: &str) -> Result<Option<String>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(stdout))
+        return Ok(JobState::NotFound);
     }
+    stdout.parse::<JobState>().map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Handle for SSH port forwarding tunnel. Kills tunnel on drop.

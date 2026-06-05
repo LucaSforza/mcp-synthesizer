@@ -86,7 +86,6 @@ pub fn run() -> Result<()> {
         let job_id: i64 = job_id_str
             .parse()
             .context("job_id is not a valid integer")?;
-        let _member_slug = member.replace(":", "-");
 
         // 3. Load + validate job metadata.
         let job = qc.load_job(model_name, job_id)?;
@@ -139,7 +138,8 @@ pub fn run() -> Result<()> {
         claude::kill_existing_mcp_synth();
         eprintln!("[DEBUG] Launching Claude Code...");
         let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
-        let claude_result = claude::launch_claude(&project_dir, &job.prompt, &output_path, model_name);
+        let claude_result =
+            claude::launch_claude(&project_dir, &job.prompt, &output_path, model_name);
 
         // 10. Restore original settings regardless of outcome.
         claude::restore_claude_settings(&project_dir, backup)?;
