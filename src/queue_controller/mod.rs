@@ -269,7 +269,7 @@ fn setup_claude_and_git(
         s.project_dir = Some(project_dir.to_path_buf());
     });
 
-    // Step 8b: create synthesis branch and checkout (before Claude Code).
+    // Step 8b: create synthesis branch and checkout NOTE: this must be executed before spawning Claude Code.
     let synthesis_branch = if let Some(key_path) = git_ssh_key {
         let auth_config = git_persistence::GitAuthConfig::new(key_path.clone());
         let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
