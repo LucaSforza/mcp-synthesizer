@@ -10,7 +10,7 @@ mod queue;
 mod slurm;
 mod synthesis_usage;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -28,7 +28,7 @@ struct CleanupState {
     project_dir: Option<PathBuf>,
     settings_backup: Option<PathBuf>,
     claude_child_pid: Option<u32>,
-    orig_branch: Option<(PathBuf, String)>,  // (project_dir, branch_name) to restore on failure
+    orig_branch: Option<(PathBuf, String)>, // (project_dir, branch_name) to restore on failure
 }
 
 static CLEANUP: Mutex<Option<CleanupState>> = Mutex::new(None);
@@ -60,11 +60,12 @@ fn do_cleanup(state: &CleanupState) {
     }
 
     if let Some((ref project_dir, ref branch_name)) = state.orig_branch
-        && let Ok(repo) = git2::Repository::open(project_dir) {
-            let _ = repo.set_head(&format!("refs/heads/{}", branch_name));
-            let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
-            eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
-        }
+        && let Ok(repo) = git2::Repository::open(project_dir)
+    {
+        let _ = repo.set_head(&format!("refs/heads/{}", branch_name));
+        let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
+        eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
+    }
 
     eprintln!("[CLEANUP] Graceful shutdown complete");
 }
@@ -77,13 +78,7 @@ impl Drop for CleanupGuard {
         if let Ok(guard) = CLEANUP.lock()
             && let Some(ref state) = *guard
         {
-            let has_work = state.claude_child_pid.is_some()
-                || state.slurm_job_id.is_some()
-                || state.project_dir.is_some()
-                || state.orig_branch.is_some();
-            if has_work {
-                do_cleanup(state);
-            }
+            do_cleanup(state);
         }
     }
 }
@@ -237,7 +232,10 @@ fn prepare_project_environment(
         );
         String::new()
     };
-    eprintln!("[DEBUG] System prompt (prompt.md): {} bytes", system_prompt.len());
+    eprintln!(
+        "[DEBUG] System prompt (prompt.md): {} bytes",
+        system_prompt.len()
+    );
 
     Ok((project_dir, system_prompt))
 }
@@ -335,11 +333,7 @@ fn cleanup_environment(
 /// file and persist them to the project's `test_run` hash in Redis.
 ///
 /// All errors are non-fatal (logged as WARN).
-fn persist_usage_to_redis(
-    redis_url: &str,
-    output_path: &Path,
-    project_name: &str,
-) {
+fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &str) {
     match synthesis_usage::parse_output_file(output_path) {
         Ok(usage) => {
             eprintln!(
@@ -348,9 +342,11 @@ fn persist_usage_to_redis(
             );
             match redis::Client::open(redis_url).and_then(|c| c.get_connection()) {
                 Ok(mut usage_conn) => {
-                    if let Err(e) =
-                        synthesis_usage::write_usage_to_test_run(&mut usage_conn, project_name, &usage)
-                    {
+                    if let Err(e) = synthesis_usage::write_usage_to_test_run(
+                        &mut usage_conn,
+                        project_name,
+                        &usage,
+                    ) {
                         eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
                     }
                 }
@@ -402,8 +398,8 @@ pub fn run() -> Result<()> {
         orig_branch: None,
     });
 
-    let mut signals = Signals::new([SIGINT, SIGTERM])
-        .context("failed to register signal handlers")?;
+    let mut signals =
+        Signals::new([SIGINT, SIGTERM]).context("failed to register signal handlers")?;
     std::thread::spawn(move || {
         for sig in signals.forever() {
             eprintln!("[DEBUG] Received signal {sig}, cleaning up...");
@@ -515,7 +511,8 @@ pub fn run() -> Result<()> {
         if let Some((ref orig_branch, ref branch_name)) = synthesis_branch {
             push_synthesis_to_git(
                 &project_dir,
-                args.git_ssh_key.as_ref()
+                args.git_ssh_key
+                    .as_ref()
                     .expect("git_ssh_key is Some when synthesis_branch is Some"),
                 &model_name,
                 iteration,
