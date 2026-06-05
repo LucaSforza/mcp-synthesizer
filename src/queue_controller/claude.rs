@@ -1,6 +1,6 @@
 //! Claude Code launch and MCP settings management.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -109,22 +109,20 @@ pub fn kill_existing_mcp_synth() {
     }
 }
 
-/// Launch Claude Code with prompt in project directory (blocking).
-/// Pipes output through `jq` for formatting, writes to `output_path`.
-pub fn launch_claude(
+/// Spawn Claude Code process with prompt in project directory.
+/// Returns the Child handle so caller can store PID for signal handling and wait.
+pub fn spawn_claude(
     project_dir: &Path,
     prompt: &str,
     output_path: &Path,
     model_name: &str,
-) -> Result<()> {
+) -> Result<std::process::Child> {
     let file = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create output file {output_path:?}"))?;
 
-    // Use --strict-mcp-config to avoid inheriting parent session's MCP servers.
-    // Override env vars to ensure correct model URL and name regardless of settings.
     let mcp_config_path = project_dir.join(".claude").join("mcp_config.json");
     let mcp_config_str = mcp_config_path.to_string_lossy().to_string();
-    let status = Command::new("claude")
+    let child = Command::new("claude")
         .args([
             "-p",
             "--output-format",
@@ -143,12 +141,8 @@ pub fn launch_claude(
         .stdin(Stdio::inherit())
         .stdout(Stdio::from(file))
         .stderr(Stdio::inherit())
-        .status()
-        .context("failed to launch Claude Code")?;
+        .spawn()
+        .context("failed to spawn Claude Code")?;
 
-    if !status.success() {
-        bail!("Claude Code exited with status {status}");
-    }
-
-    Ok(())
+    Ok(child)
 }
