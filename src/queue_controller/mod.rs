@@ -59,13 +59,12 @@ fn do_cleanup(state: &CleanupState) {
         eprintln!("[CLEANUP] Restored claude settings");
     }
 
-    if let Some((ref project_dir, ref branch_name)) = state.orig_branch {
-        if let Ok(repo) = git2::Repository::open(project_dir) {
+    if let Some((ref project_dir, ref branch_name)) = state.orig_branch
+        && let Ok(repo) = git2::Repository::open(project_dir) {
             let _ = repo.set_head(&format!("refs/heads/{}", branch_name));
             let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
             eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
         }
-    }
 
     eprintln!("[CLEANUP] Graceful shutdown complete");
 }
@@ -403,7 +402,7 @@ pub fn run() -> Result<()> {
         orig_branch: None,
     });
 
-    let mut signals = Signals::new(&[SIGINT, SIGTERM])
+    let mut signals = Signals::new([SIGINT, SIGTERM])
         .context("failed to register signal handlers")?;
     std::thread::spawn(move || {
         for sig in signals.forever() {
