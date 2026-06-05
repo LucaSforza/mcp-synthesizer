@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -140,10 +140,256 @@ pub struct Args {
 }
 
 // ---------------------------------------------------------------------------
+// Loop step functions
+// ---------------------------------------------------------------------------
+
+/// Step 1-3: Peek highest-priority job from Redis queue,
+/// parse `{model_name}:{job_id}` member, and load job metadata.
+///
+/// Returns `Ok(None)` when the queue is empty (caller should exit).
+fn peek_and_load_job(
+    qc: &mut queue::QueueClient,
+) -> Result<Option<(String, String, String, i64, queue::JobMetadata)>> {
+    let (member, score) = match qc.peek_job()? {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+    eprintln!("[DEBUG] Peeked job '{member}' (priority={score})");
+
+    // Parse "{model_name}:{job_id}". Use rsplitn for colons in model name.
+    let mut parts = member.rsplitn(2, ':');
+    let job_id_str = parts
+        .next()
+        .context("missing job_id in member")?
+        .to_string();
+    let model_name = parts
+        .next()
+        .context("missing model_name in member")?
+        .to_string();
+    let job_id: i64 = job_id_str
+        .parse()
+        .context("job_id is not a valid integer")?;
+
+    let job = qc.load_job(&model_name, job_id)?;
+    eprintln!(
+        "[DEBUG] Loaded job: model={} project={} seed={}",
+        job.model_name, job.project, job.seed,
+    );
+
+    Ok(Some((member, model_name, job_id_str, job_id, job)))
+}
+
+/// Step 4-5: Construct model path, generate sbatch script, and submit
+/// via SSH.  Returns the Slurm job ID.
+fn submit_slurm_job(
+    cluster_host: &str,
+    models_path: &Path,
+    model_name: &str,
+    llama_path: &str,
+    seed: &str,
+) -> Result<String> {
+    let model_path = models_path.join(model_name);
+    eprintln!("[DEBUG] Model path: {model_path:?}");
+
+    let sbatch = slurm::generate_sbatch(&model_path, llama_path, seed);
+    let slurm_job_id = slurm::submit_sbatch(cluster_host, &sbatch)?;
+    eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
+    Ok(slurm_job_id)
+}
+
+/// Step 6: Poll Slurm job until RUNNING, retrieve compute node hostname
+/// from squeue, convert to IP, and establish an SSH port-forwarding tunnel.
+///
+/// Returns a `TunnelHandle` whose `Drop` implementation closes the tunnel.
+fn wait_and_create_tunnel(
+    cluster_host: &str,
+    slurm_job_id: &str,
+    poll_interval: u64,
+    poll_timeout: u64,
+    tunnel_port: u16,
+) -> Result<slurm::TunnelHandle> {
+    slurm::poll_job(cluster_host, slurm_job_id, poll_interval, poll_timeout)?;
+    let node_name = slurm::get_job_node(cluster_host, slurm_job_id)?;
+    let node_ip = slurm::node_name_to_ip(&node_name);
+    let tunnel = slurm::establish_tunnel(cluster_host, &node_ip, tunnel_port)?;
+    Ok(tunnel)
+}
+
+/// Step 7 + 7b: Resolve the project directory under `project_root` and
+/// read the project-specific system prompt from `prompt.md`.
+fn prepare_project_environment(
+    project_root: &Path,
+    project_name: &str,
+) -> Result<(PathBuf, String)> {
+    let project_dir = claude::resolve_project_dir(project_root, project_name);
+    if !project_dir.exists() {
+        bail!("project directory not found: {project_dir:?}");
+    }
+    eprintln!("[DEBUG] Project dir: {project_dir:?}");
+
+    let system_prompt_path = project_dir.join("prompt.md");
+    let system_prompt = if system_prompt_path.exists() {
+        std::fs::read_to_string(&system_prompt_path)
+            .with_context(|| format!("failed to read {system_prompt_path:?}"))?
+    } else {
+        eprintln!(
+            "[WARN] No prompt.md found at {system_prompt_path:?}, \
+             --append-system-prompt omitted"
+        );
+        String::new()
+    };
+    eprintln!("[DEBUG] System prompt (prompt.md): {} bytes", system_prompt.len());
+
+    Ok((project_dir, system_prompt))
+}
+
+/// Step 8 + 8b: Inject MCP server settings into `.claude/settings.local.json`
+/// and, if SSH key is configured, create a synthesis git branch and checkout.
+///
+/// Returns the settings backup path and optional synthesis branch info
+/// `(orig_branch, branch_name)`.
+fn setup_claude_and_git(
+    project_dir: &Path,
+    model_url: &str,
+    model_name: &str,
+    project_name: &str,
+    git_ssh_key: Option<&PathBuf>,
+    seed: u64,
+    iteration: u64,
+) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
+    // Step 8: inject MCP settings (backup existing).
+    let project_dir_str = project_dir.to_string_lossy().to_string();
+    let backup = claude::setup_claude_settings(
+        project_dir,
+        model_url,
+        model_name,
+        &project_dir_str,
+        project_name,
+    )?;
+    with_cleanup(|s| {
+        s.settings_backup = backup.clone();
+        s.project_dir = Some(project_dir.to_path_buf());
+    });
+
+    // Step 8b: create synthesis branch and checkout (before Claude Code).
+    let synthesis_branch = if let Some(key_path) = git_ssh_key {
+        let auth_config = git_persistence::GitAuthConfig::new(key_path.clone());
+        let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
+            .context("git persistence setup failed")?;
+        let (orig_branch, branch_name) = git
+            .checkout_synthesis_branch(model_name, iteration, seed)
+            .context("failed to prepare git branch for synthesis")?;
+        with_cleanup(|s| {
+            s.orig_branch = Some((project_dir.to_path_buf(), orig_branch.clone()));
+        });
+        Some((orig_branch, branch_name))
+    } else {
+        None
+    };
+
+    Ok((backup, synthesis_branch))
+}
+
+/// Step 9: Kill stale `mcp_synth` process, launch Claude Code, and return
+/// the child process handle together with the output file path.
+fn run_claude_code(
+    project_dir: &Path,
+    prompt: &str,
+    system_prompt: &str,
+    model_name: &str,
+    job_id_str: &str,
+) -> Result<(std::process::Child, PathBuf)> {
+    claude::kill_existing_mcp_synth();
+    eprintln!("[DEBUG] Launching Claude Code...");
+    let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
+    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, model_name)?;
+    Ok((child, output_path))
+}
+
+/// Step 10 + 10b: Restore original `.claude/settings.local.json` from
+/// backup and cancel the Slurm model-serving job.
+fn cleanup_environment(
+    project_dir: &Path,
+    backup: Option<PathBuf>,
+    cluster_host: &str,
+) -> Result<()> {
+    // Step 10: restore settings.
+    claude::restore_claude_settings(project_dir, backup)?;
+    with_cleanup(|s| {
+        s.settings_backup = None;
+        s.project_dir = None;
+    });
+
+    // Step 10b: cancel Slurm job — model server no longer needed.
+    let slurm_job_id = CLEANUP
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.as_mut().and_then(|s| s.slurm_job_id.take()));
+    if let Some(ref job_id) = slurm_job_id {
+        slurm::cancel_job(cluster_host, job_id);
+    }
+
+    Ok(())
+}
+
+/// Step 13: Parse usage metrics from the Claude Code stream-json output
+/// file and persist them to the project's `test_run` hash in Redis.
+///
+/// All errors are non-fatal (logged as WARN).
+fn persist_usage_to_redis(
+    redis_url: &str,
+    output_path: &Path,
+    project_name: &str,
+) {
+    match synthesis_usage::parse_output_file(output_path) {
+        Ok(usage) => {
+            eprintln!(
+                "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
+                usage.input_tokens, usage.output_tokens, usage.cost_usd,
+            );
+            match redis::Client::open(redis_url).and_then(|c| c.get_connection()) {
+                Ok(mut usage_conn) => {
+                    if let Err(e) =
+                        synthesis_usage::write_usage_to_test_run(&mut usage_conn, project_name, &usage)
+                    {
+                        eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
+                    }
+                }
+                Err(e) => eprintln!("[WARN] Failed to connect to Redis for usage write: {e:#}"),
+            }
+        }
+        Err(e) => eprintln!(
+            "[WARN] Failed to parse usage from {}: {e:#}",
+            output_path.display(),
+        ),
+    }
+}
+
+/// Step 14: Stage all changes, create a git commit, push to origin, and
+/// restore the original branch.
+fn push_synthesis_to_git(
+    project_dir: &Path,
+    git_ssh_key: &Path,
+    model_name: &str,
+    iteration: u64,
+    seed: u64,
+    orig_branch: &str,
+    branch_name: &str,
+) -> Result<()> {
+    let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.to_path_buf());
+    let commit_message = format!("Synthesis: {model_name} iteration {iteration} seed {seed}");
+    let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
+        .context("git persistence setup failed")?;
+    git.commit_and_push(branch_name, orig_branch, &commit_message)
+        .context("failed to persist synthesis to git")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
-/// Run the queue controller. Called from binary entrypoint.
+/// Run the queue controller.  Called from binary entrypoint.
 pub fn run() -> Result<()> {
     let args = Args::parse();
 
@@ -177,106 +423,62 @@ pub fn run() -> Result<()> {
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
 
     loop {
-        // 1. Peek highest-priority job.
-        let (member, score) = match qc.peek_job()? {
-            Some(m) => m,
-            None => {
-                eprintln!("[DEBUG] Queue empty. Exiting.");
-                return Ok(());
-            }
+        // ------------------------------------------------------------------
+        // Phase 1 — Acquire job from Redis queue
+        // ------------------------------------------------------------------
+        let Some((member, model_name, job_id_str, job_id, job)) = peek_and_load_job(&mut qc)?
+        else {
+            eprintln!("[DEBUG] Queue empty. Exiting.");
+            return Ok(());
         };
-        eprintln!("[DEBUG] Peeked job '{member}' (priority={score})");
+        let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
+        let iteration = job_id as u64;
 
-        // 2. Parse "{model_name}:{job_id}". Use rsplitn for colons in model name.
-        let mut parts = member.rsplitn(2, ':');
-        let job_id_str = parts.next().context("missing job_id in member")?;
-        let model_name = parts.next().context("missing model_name in member")?;
-        let job_id: i64 = job_id_str.parse().context("job_id is not a valid integer")?;
-
-        // 3. Load + validate job metadata.
-        let job = qc.load_job(model_name, job_id)?;
-        eprintln!(
-            "[DEBUG] Loaded job: model={} project={} seed={}",
-            job.model_name, job.project, job.seed,
-        );
-
-        // 4. Construct model path.
-        let model_path = args.models_path.join(&job.model_name);
-        eprintln!("[DEBUG] Model path: {model_path:?}");
-
-        // 5. Submit sbatch via SSH.
-        let sbatch = slurm::generate_sbatch(&model_path, &args.llama_path, &job.seed);
-        let slurm_job_id = slurm::submit_sbatch(&args.cluster_host, &sbatch)?;
-        eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
+        // ------------------------------------------------------------------
+        // Phase 2 — Submit Slurm job and establish SSH tunnel
+        // ------------------------------------------------------------------
+        let slurm_job_id = submit_slurm_job(
+            &args.cluster_host,
+            &args.models_path,
+            &model_name,
+            &args.llama_path,
+            &job.seed,
+        )?;
         with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
 
-        // 6. Poll until RUNNING, then establish tunnel to compute node.
-        slurm::poll_job(
+        let _tunnel = wait_and_create_tunnel(
             &args.cluster_host,
             &slurm_job_id,
             args.poll_interval,
             args.poll_timeout,
+            args.tunnel_port,
         )?;
 
-        let node_name = slurm::get_job_node(&args.cluster_host, &slurm_job_id)?;
-        let node_ip = slurm::node_name_to_ip(&node_name);
-        let _tunnel = slurm::establish_tunnel(&args.cluster_host, &node_ip, args.tunnel_port)?;
+        // ------------------------------------------------------------------
+        // Phase 3 — Prepare local environment
+        // ------------------------------------------------------------------
+        let (project_dir, system_prompt) =
+            prepare_project_environment(&args.project_root, &job.project)?;
 
-        // 7. Resolve project directory.
-        let project_dir = claude::resolve_project_dir(&args.project_root, &job.project);
-        if !project_dir.exists() {
-            bail!("project directory not found: {project_dir:?}");
-        }
-        eprintln!("[DEBUG] Project dir: {project_dir:?}");
-
-        // 7b. Read project's system prompt (prompt.md) for --append-system-prompt.
-        let system_prompt_path = project_dir.join("prompt.md");
-        let system_prompt = if system_prompt_path.exists() {
-            std::fs::read_to_string(&system_prompt_path)
-                .with_context(|| format!("failed to read {system_prompt_path:?}"))?
-        } else {
-            eprintln!("[WARN] No prompt.md found at {system_prompt_path:?}, --append-system-prompt omitted");
-            String::new()
-        };
-        eprintln!("[DEBUG] System prompt (prompt.md): {} bytes", system_prompt.len());
-
-        // 8. Inject MCP settings (backup existing).
-        let project_dir_str = project_dir.to_string_lossy().to_string();
-        let backup = claude::setup_claude_settings(
+        let (backup, synthesis_branch) = setup_claude_and_git(
             &project_dir,
             &args.model_url,
-            model_name,
-            &project_dir_str,
+            &model_name,
             &job.project,
+            args.git_ssh_key.as_ref(),
+            seed,
+            iteration,
         )?;
-        with_cleanup(|s| {
-            s.settings_backup = backup.clone();
-            s.project_dir = Some(project_dir.clone());
-        });
 
-        // 8b. Create synthesis branch and checkout (before Claude Code).
-        let mut synthesis_branch: Option<(String, String)> = None; // (orig_branch, branch_name)
-        let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
-        let iteration = job_id as u64;
-        if let Some(ref git_ssh_key) = args.git_ssh_key {
-            let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.clone());
-            let git = git_persistence::GitPersistence::new(&project_dir, &auth_config)
-                .context("git persistence setup failed")?;
-            let (orig_branch, branch_name) = git
-                .checkout_synthesis_branch(model_name, iteration, seed)
-                .context("failed to prepare git branch for synthesis")?;
-            with_cleanup(|s| {
-                s.orig_branch = Some((project_dir.clone(), orig_branch.clone()));
-            });
-            synthesis_branch = Some((orig_branch, branch_name));
-        }
-
-        // 9. Kill stale mcp_synth and launch Claude Code.
-        claude::kill_existing_mcp_synth();
-        eprintln!("[DEBUG] Launching Claude Code...");
-        let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
-        let mut claude_child = claude::spawn_claude(
-            &project_dir, &job.prompt, &system_prompt, &output_path, model_name,
+        // ------------------------------------------------------------------
+        // Phase 4 — Run Claude Code
+        // ------------------------------------------------------------------
+        let (mut claude_child, output_path) = run_claude_code(
+            &project_dir,
+            &job.prompt,
+            &system_prompt,
+            &model_name,
+            &job_id_str,
         )?;
         let child_pid = claude_child.id();
         with_cleanup(|s| s.claude_child_pid = Some(child_pid));
@@ -286,93 +488,45 @@ pub fn run() -> Result<()> {
             .context("failed to wait for Claude Code")?;
         with_cleanup(|s| s.claude_child_pid = None);
 
-        // 10. Restore settings regardless of outcome.
-        claude::restore_claude_settings(&project_dir, backup)?;
-        with_cleanup(|s| {
-            s.settings_backup = None;
-            s.project_dir = None;
-        });
+        // ------------------------------------------------------------------
+        // Phase 5 — Tear down environment (always runs after Claude)
+        // ------------------------------------------------------------------
+        cleanup_environment(&project_dir, backup, &args.cluster_host)?;
 
-        // 10b. Cancel Slurm job — model server no longer needed.
-        let slurm_job_id = CLEANUP.lock().ok().and_then(|mut guard| {
-            guard.as_mut().and_then(|s| s.slurm_job_id.take())
-        });
-        if let Some(ref job_id) = slurm_job_id {
-            slurm::cancel_job(&args.cluster_host, job_id);
-        }
-
-        // 11. Bail if Claude Code failed.
+        // ------------------------------------------------------------------
+        // Phase 6 — Evaluate result
+        // ------------------------------------------------------------------
         if !claude_status.success() {
             bail!("Claude Code exited with status {claude_status}");
         }
         eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
 
-        // 12. Check result; remove from queue only on succeeded_full.
-        let succeeded = qc.check_succeeded_full(&job.project)?;
-        if succeeded {
-            qc.remove_job(&member)?;
-            eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
-
-            // 13. Parse usage metrics from Claude Code output while file still exists
-            //     (before git commit_and_push switches back to original branch).
-            let output_path = project_dir.join(format!("{}_{}.json", model_name, job_id_str));
-            let usage_opt = match synthesis_usage::parse_output_file(&output_path) {
-                Ok(usage) => {
-                    eprintln!(
-                        "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
-                        usage.input_tokens, usage.output_tokens, usage.cost_usd,
-                    );
-                    Some(usage)
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[WARN] Failed to parse usage from {}: {e:#}",
-                        output_path.display(),
-                    );
-                    None
-                }
-            };
-
-            // 14. Commit and push synthesis results to Git (switches back to original branch).
-            if let Some((ref orig_branch, ref branch_name)) = synthesis_branch {
-                let auth_config = git_persistence::GitAuthConfig::new(
-                    args.git_ssh_key.clone().expect("git_ssh_key checked above"),
-                );
-                let commit_message = format!(
-                    "Synthesis: {model_name} iteration {iteration} seed {seed}"
-                );
-                let git = git_persistence::GitPersistence::new(&project_dir, &auth_config)
-                    .context("git persistence setup failed")?;
-                git.commit_and_push(branch_name, orig_branch, &commit_message)
-                    .context("failed to persist synthesis to git")?;
-                with_cleanup(|s| s.orig_branch = None);
-            }
-
-            // 15. Persist usage to Redis (no file access needed, data in memory).
-            if let Some(usage) = usage_opt {
-                match redis::Client::open(args.redis_url.as_str())
-                    .and_then(|c| c.get_connection())
-                {
-                    Ok(mut usage_conn) => {
-                        if let Err(e) = synthesis_usage::write_usage_to_test_run(
-                            &mut usage_conn,
-                            &job.project,
-                            &usage,
-                        ) {
-                            eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "[WARN] Failed to connect to Redis for usage write: {e:#}"
-                        );
-                    }
-                }
-            }
-
-            // 16. Loop to next job.
-        } else {
+        if !qc.check_succeeded_full(&job.project)? {
             bail!("synthesis not successful for {member}, job remains in queue");
         }
+
+        qc.remove_job(&member)?;
+        eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+
+        // ------------------------------------------------------------------
+        // Phase 7 — Persist results
+        // ------------------------------------------------------------------
+        persist_usage_to_redis(&args.redis_url, &output_path, &job.project);
+
+        if let Some((ref orig_branch, ref branch_name)) = synthesis_branch {
+            push_synthesis_to_git(
+                &project_dir,
+                args.git_ssh_key.as_ref()
+                    .expect("git_ssh_key is Some when synthesis_branch is Some"),
+                &model_name,
+                iteration,
+                seed,
+                orig_branch,
+                branch_name,
+            )?;
+            with_cleanup(|s| s.orig_branch = None);
+        }
+
+        // Loop back for next job.
     }
 }
