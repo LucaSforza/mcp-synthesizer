@@ -132,6 +132,7 @@ pub(crate) fn validate_trial_params(
 pub trait Database: Send {
     fn get_or_create_project(&self, name: &str, number_invariants: i32) -> Result<Project, DbError>;
     fn create_test_run(&self, project_id: i64) -> Result<TestRun, DbError>;
+    #[allow(clippy::too_many_arguments)]
     fn record_trial(
         &self,
         test_run_id: i64,

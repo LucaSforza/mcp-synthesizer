@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
     let mut stmt = sqlite.prepare(
         "SELECT id, test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at FROM synthesis_trial ORDER BY id",
     )?;
+    #[allow(clippy::type_complexity)]
     let trials: Vec<(i64, i64, i32, Option<i64>, String, i32, Option<String>, bool, String)> = stmt
         .query_map([], |row| {
             Ok((
