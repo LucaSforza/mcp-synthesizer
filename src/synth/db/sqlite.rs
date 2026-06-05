@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection as SqliteConnection};
 
-use crate::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
+use crate::synth::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
 
 pub struct SqliteDatabase {
     conn: SqliteConnection,

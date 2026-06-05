@@ -1,5 +1,5 @@
 use super::*;
-use crate::db::{Database, RedisDatabase};
+use crate::synth::db::{Database, RedisDatabase};
 
 struct TestCtx {
     db: RedisDatabase,

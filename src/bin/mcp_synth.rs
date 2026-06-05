@@ -1,12 +1,10 @@
-#[path = "../db/mod.rs"] mod db;
-#[path = "../pipeline.rs"] mod pipeline;
-#[path = "../tools.rs"] mod tools;
+#[path = "../synth/mod.rs"] mod synth;
 
 use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};
 
-use db::DbConfig;
-use tools::SynthesisTools;
+use synth::db::DbConfig;
+use synth::tools::SynthesisTools;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

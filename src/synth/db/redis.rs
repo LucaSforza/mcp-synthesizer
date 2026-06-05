@@ -1,7 +1,7 @@
 use chrono::Utc;
 use ::redis::Commands;
 
-use crate::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
+use crate::synth::db::{Database, DbError, Metrics, Project, SynthesisTrial, TestRun, validate_trial_params};
 
 pub struct RedisDatabase {
     pub client: redis::Client,

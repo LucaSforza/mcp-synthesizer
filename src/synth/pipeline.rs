@@ -6,10 +6,10 @@ use std::time::Instant;
 
 use serde::Deserialize;
 
-use crate::db::{Database, Metrics};
+use crate::synth::db::{Database, Metrics};
 
 #[allow(unused_imports)]
-use crate::db::DbError;
+use crate::synth::db::DbError;
 
 #[derive(Debug)]
 pub struct VerificationReport {

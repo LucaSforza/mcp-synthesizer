@@ -3,8 +3,8 @@ use std::sync::Mutex;
 
 use rmcp::{tool, tool_router};
 
-use crate::db::{Database, DbConfig};
-use crate::pipeline::{extract_forge_gas_json, SynthesisPipeline};
+use crate::synth::db::{Database, DbConfig};
+use crate::synth::pipeline::{extract_forge_gas_json, SynthesisPipeline};
 
 pub struct SynthesisTools {
     pub cwd: String,

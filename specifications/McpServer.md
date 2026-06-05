@@ -7,7 +7,7 @@ MCP server for Solidity smart contract synthesis. Integrates Foundry toolchain (
 Persists synthesis trials (compilation, fuzzing, halmos verification) to either Redis or SQLite. Two backends, same `Database` trait — selected at startup via `--db-type`.
 
 **Binary name:** `mcp_synth`
-**Source:** `src/bin/mcp_synth.rs` + `src/{tools,pipeline,db}.rs`
+**Source:** `src/bin/mcp_synth.rs` + `src/synth/{mod,tools,pipeline,db}.rs`
 **Package:** `mcp_synth` (Cargo.toml)
 
 ---

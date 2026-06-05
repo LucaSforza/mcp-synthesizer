@@ -114,9 +114,9 @@ Single-threaded MCP server via stdio transport (`rmcp` SDK from git):
 ### `src/bin/mcp_synth.rs` — CLI entry point
 Parses `--cwd`, `--project`, `--invariants`, `--db-type`, `--redis-url`, `--db-path` with clap. Builds `DbConfig` from args, calls `DbConfig::connect()` to get `Box<dyn Database>`. Creates/loads project, creates test run. Serves `SynthesisTools` over rmcp stdio transport. Debug logging via `eprintln!` (`[DEBUG]` prefix).
 
-### `src/db/` — Database trait, Redis + SQLite implementations
+### `src/synth/db/` — Database trait, Redis + SQLite implementations
 
-**`src/db/mod.rs`** — Shared definitions:
+**`src/synth/db/mod.rs`** — Shared definitions:
 - Data structs: `Project`, `TestRun`, `SynthesisTrial`, `Metrics`
 - `DbError` enum — `Redis(::redis::RedisError)`, `Sqlite(rusqlite::Error)`, `InvalidResultType(String)`. Implements `Display` + `std::error::Error` + `From` for both error types.
 - `Database` trait — 10 methods, all `&self`, bound `Send`:
@@ -160,7 +160,7 @@ Constraints: succeeded_* must be last trial in test_run; `not_proved_invariants 
 - `src/db/redis_test.rs` — 15 tests, `FLUSHDB` on DB 1 per module
 - `src/db/sqlite_test.rs` — 15 tests, `:memory:` per module
 
-### `src/tools.rs` — MCP tool definitions
+### `src/synth/tools.rs` — MCP tool definitions
 4 tools via `rmcp` `#[tool]` + `#[tool_router]` macros:
 
 | Tool | Description | Idempotent |
@@ -172,7 +172,7 @@ Constraints: succeeded_* must be last trial in test_run; `not_proved_invariants 
 
 `SynthesisTools` wraps `Mutex<Box<dyn Database>>` and `Mutex<Option<SynthesisPipeline>>`. `DbConfig` stored for lazy pipeline init. Pipeline is lazily initialized on first `run_synthesis` call via `DbConfig::connect()`.
 
-### `src/pipeline.rs` — Synthesis pipeline
+### `src/synth/pipeline.rs` — Synthesis pipeline
 `SynthesisPipeline::run()` three-phase gating:
 
 ```
