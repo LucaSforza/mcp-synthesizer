@@ -67,11 +67,21 @@ fn do_cleanup(state: &CleanupState) {
         eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
     }
 
-    eprintln!("[CLEANUP] Graceful shutdown complete");
 }
 
 /// Drop guard: runs cleanup on any remaining state when `run()` exits.
 struct CleanupGuard;
+
+/// Run pending cleanup actions, then reset all per-iteration fields to `None`
+/// so the next loop iteration starts with clean state.
+fn cleanup_and_reset(state: &mut CleanupState) {
+    do_cleanup(state);
+    state.slurm_job_id = None;
+    state.project_dir = None;
+    state.settings_backup = None;
+    state.claude_child_pid = None;
+    state.orig_branch = None;
+}
 
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
@@ -80,6 +90,7 @@ impl Drop for CleanupGuard {
         {
             do_cleanup(state);
         }
+        eprintln!("[CLEANUP] Graceful shutdown complete");
     }
 }
 
@@ -144,7 +155,9 @@ pub struct Args {
 fn peek_and_load_job(
     qc: &mut queue::QueueClient,
 ) -> Result<Option<(String, String, String, i64, queue::JobMetadata)>> {
-    eprintln!("[DEBUG] [Step 1-3] peek_and_load_job — peek Redis queue, parse model:job_id, load metadata");
+    eprintln!(
+        "[DEBUG] [Step 1-3] peek_and_load_job — peek Redis queue, parse model:job_id, load metadata"
+    );
     let (member, score) = match qc.peek_job()? {
         Some(m) => m,
         None => return Ok(None),
@@ -205,7 +218,9 @@ fn wait_and_create_tunnel(
     poll_timeout: u64,
     tunnel_port: u16,
 ) -> Result<slurm::TunnelHandle> {
-    eprintln!("[DEBUG] [Step 6] wait_and_create_tunnel — poll job status, resolve node IP, establish SSH tunnel");
+    eprintln!(
+        "[DEBUG] [Step 6] wait_and_create_tunnel — poll job status, resolve node IP, establish SSH tunnel"
+    );
     slurm::poll_job(cluster_host, slurm_job_id, poll_interval, poll_timeout)?;
     let node_name = slurm::get_job_node(cluster_host, slurm_job_id)?;
     let node_ip = slurm::node_name_to_ip(&node_name);
@@ -219,7 +234,9 @@ fn prepare_project_environment(
     project_root: &Path,
     project_name: &str,
 ) -> Result<(PathBuf, String)> {
-    eprintln!("[DEBUG] [Step 7+7b] prepare_project_environment — resolve project dir, read prompt.md");
+    eprintln!(
+        "[DEBUG] [Step 7+7b] prepare_project_environment — resolve project dir, read prompt.md"
+    );
     let project_dir = claude::resolve_project_dir(project_root, project_name);
     if !project_dir.exists() {
         bail!("project directory not found: {project_dir:?}");
@@ -259,7 +276,9 @@ fn setup_claude_and_git(
     seed: u64,
     iteration: u64,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
-    eprintln!("[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch");
+    eprintln!(
+        "[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch"
+    );
     // Step 8: inject MCP settings (backup existing).
     let project_dir_str = project_dir.to_string_lossy().to_string();
     let backup = claude::setup_claude_settings(
@@ -317,7 +336,9 @@ fn cleanup_environment(
     backup: Option<PathBuf>,
     cluster_host: &str,
 ) -> Result<()> {
-    eprintln!("[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job");
+    eprintln!(
+        "[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job"
+    );
     // Step 10: restore settings.
     claude::restore_claude_settings(project_dir, backup)?;
     with_cleanup(|s| {
@@ -376,7 +397,9 @@ fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()
 ///
 /// All errors are non-fatal (logged as WARN).
 fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &str) {
-    eprintln!("[DEBUG] [Step 13] persist_usage_to_redis — parse Claude Code output, write usage to Redis");
+    eprintln!(
+        "[DEBUG] [Step 13] persist_usage_to_redis — parse Claude Code output, write usage to Redis"
+    );
     match synthesis_usage::parse_output_file(output_path) {
         Ok(usage) => {
             eprintln!(
@@ -451,6 +474,7 @@ pub fn run() -> Result<()> {
             if let Some(ref state) = *guard {
                 do_cleanup(state);
             }
+            eprintln!("[CLEANUP] Graceful shutdown complete");
             std::process::exit(128 + sig);
         }
     });
@@ -524,6 +548,11 @@ pub fn run() -> Result<()> {
 
         let claude_status = claude_child
             .wait()
+            // TODO: Invece di mettere un wait, bisogna far
+            // entrare il controller in un pooling. Da un lato
+            // nel pooling controlliamo se il job claude sia
+            // finito, e poi controlliamo che nel cluster vada
+            // tutto bene. Gestire poi i diversi casi.
             .context("failed to wait for Claude Code")?;
         with_cleanup(|s| s.claude_child_pid = None);
 
@@ -556,6 +585,13 @@ pub fn run() -> Result<()> {
                 branch_name,
             )?;
             with_cleanup(|s| s.orig_branch = None);
+        }
+
+        // Reset per-iteration state for next job.
+        if let Ok(mut guard) = CLEANUP.lock()
+            && let Some(ref mut state) = *guard
+        {
+            cleanup_and_reset(state);
         }
 
         // Loop back for next job.
