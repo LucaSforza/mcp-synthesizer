@@ -6,7 +6,7 @@ Four executables, one crate:
 
 | Binary | Path | Purpose |
 |--------|------|---------|
-| `mcp_synth` | `src/main.rs` | MCP server exposing Foundry + Halmos as tools |
+| `mcp_synth` | `src/bin/mcp_synth.rs` | MCP server exposing Foundry + Halmos as tools |
 | `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
 | `populate_queue` | `src/bin/populate_queue.rs` | Batch enqueue synthesis jobs into Redis |
 | `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |

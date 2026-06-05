@@ -28,6 +28,10 @@ rand_chacha = "0.9"
 rand_core = "0.9"
 
 [[bin]]
+name = "mcp_synth"
+path = "src/bin/mcp_synth.rs"
+
+[[bin]]
 name = "migrate"
 path = "src/bin/migrate_sqlite_to_redis.rs"
 

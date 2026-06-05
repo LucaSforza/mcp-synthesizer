@@ -1,6 +1,6 @@
-mod db;
-mod pipeline;
-mod tools;
+#[path = "../db/mod.rs"] mod db;
+#[path = "../pipeline.rs"] mod pipeline;
+#[path = "../tools.rs"] mod tools;
 
 use clap::Parser;
 use rmcp::{transport::stdio, ServiceExt};

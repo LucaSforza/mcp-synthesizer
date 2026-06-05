@@ -111,7 +111,7 @@ TEST_REDIS_URL=redis://localhost:6379/1 cargo test redis_tests -- --test-threads
 
 Single-threaded MCP server via stdio transport (`rmcp` SDK from git):
 
-### `src/main.rs` — CLI entry point
+### `src/bin/mcp_synth.rs` — CLI entry point
 Parses `--cwd`, `--project`, `--invariants`, `--db-type`, `--redis-url`, `--db-path` with clap. Builds `DbConfig` from args, calls `DbConfig::connect()` to get `Box<dyn Database>`. Creates/loads project, creates test run. Serves `SynthesisTools` over rmcp stdio transport. Debug logging via `eprintln!` (`[DEBUG]` prefix).
 
 ### `src/db/` — Database trait, Redis + SQLite implementations
