@@ -3,23 +3,45 @@
 //! After successful synthesis, commits all changes in the project directory
 //! to a new branch `{model_name}-{iteration}-{seed}` and pushes to origin.
 //!
-//! Uses git2 crate exclusively — no shelling out to `git` CLI.
+//! Uses git2 + auth-git2 — no shelling out to `git` CLI.
 
 use anyhow::{bail, Context, Result};
 use git2::{BranchType, Repository};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Authentication configuration for Git operations.
+pub struct GitAuthConfig {
+    pub ssh_private_key: PathBuf,
+}
+
+impl GitAuthConfig {
+    pub fn new(ssh_private_key: PathBuf) -> Self {
+        Self { ssh_private_key }
+    }
+}
 
 /// Wraps a git2 `Repository` for synthesis output persistence.
 pub struct GitPersistence {
     repo: Repository,
+    authenticator: auth_git2::GitAuthenticator,
 }
 
 impl GitPersistence {
-    /// Open a git repository by walking up from `repo_path`.
-    pub fn new(repo_path: &Path) -> Result<Self> {
+    /// Open a git repository and configure SSH authentication.
+    pub fn new(repo_path: &Path, auth_config: &GitAuthConfig) -> Result<Self> {
         let repo = Repository::open(repo_path)
             .with_context(|| format!("failed to open git repository at {repo_path:?}"))?;
-        Ok(Self { repo })
+
+        // Build authenticator: only SSH key from file, no agent, no prompts.
+        let authenticator = auth_git2::GitAuthenticator::new_empty()
+            .try_ssh_agent(false)
+            .try_cred_helper(false)
+            .try_password_prompt(0)
+            .prompt_ssh_key_password(false)
+            .add_ssh_key_from_file(&auth_config.ssh_private_key, None as Option<String>);
+
+        eprintln!("[DEBUG] Git: configured SSH authentication");
+        Ok(Self { repo, authenticator })
     }
 
     /// Commit all synthesis output changes on a new branch and push to origin.
@@ -145,15 +167,38 @@ impl GitPersistence {
         eprintln!("[DEBUG] Git: created commit {commit_oid}: '{commit_message}'");
 
         // -- Step 8: Push to origin + set upstream tracking ------------------
+        let push_result = self.push_and_set_upstream(&branch_name);
+
+        // Always restore original branch before propagating any error.
+        self.restore_original_branch(&orig_branch)?;
+
+        push_result?;
+        Ok(())
+    }
+
+    /// Push branch to origin and set upstream tracking.
+    /// Returns Err if push or upstream configuration fails.
+    fn push_and_set_upstream(&self, branch_name: &str) -> Result<()> {
         let mut remote = self
             .repo
             .find_remote("origin")
             .context("failed to find remote 'origin'")?;
 
+        // Validate remote URL is SSH.
+        let remote_url = remote
+            .url()
+            .context("remote 'origin' has no URL")?
+            .to_string();
+        if !remote_url.starts_with("git@") && !remote_url.starts_with("ssh://") {
+            bail!("remote 'origin' URL is not an SSH remote: expected git@ or ssh://, got {remote_url:?}");
+        }
+
+        // Build credentials callback from auth-git2.
+        let git_config = git2::Config::open_default()
+            .context("failed to open git config for authentication")?;
         let mut push_callbacks = git2::RemoteCallbacks::new();
-        push_callbacks.credentials(|_url, username_from_url, _allowed_types| {
-            git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
-        });
+        push_callbacks.credentials(self.authenticator.credentials(&git_config));
+
         let mut push_opts = git2::PushOptions::new();
         push_opts.remote_callbacks(push_callbacks);
 
@@ -166,7 +211,7 @@ impl GitPersistence {
         // Equivalent to: git branch --set-upstream-to=origin/<branch>
         let mut branch = self
             .repo
-            .find_branch(&branch_name, BranchType::Local)
+            .find_branch(branch_name, BranchType::Local)
             .with_context(|| format!("failed to find local branch '{branch_name}'"))?;
         let upstream = format!("origin/{}", branch_name);
         branch
@@ -176,7 +221,11 @@ impl GitPersistence {
             "[DEBUG] Git: upstream tracking set: '{branch_name}' -> 'origin/{branch_name}'"
         );
 
-        // -- Step 9: Return to original branch -------------------------------
+        Ok(())
+    }
+
+    /// Restore working tree to original branch.
+    fn restore_original_branch(&self, orig_branch: &str) -> Result<()> {
         self.repo
             .set_head(&format!("refs/heads/{}", orig_branch))
             .with_context(|| format!("failed to set HEAD back to '{orig_branch}'"))?;
@@ -184,7 +233,6 @@ impl GitPersistence {
             .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
             .with_context(|| format!("failed to checkout original branch '{orig_branch}'"))?;
         eprintln!("[DEBUG] Git: returned to original branch '{orig_branch}'");
-
         Ok(())
     }
 }

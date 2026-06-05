@@ -121,6 +121,11 @@ pub struct Args {
     // TODO: remove hardcoded default — make configurable through Redis job metadata.
     #[arg(long, default_value = "/home/sforza_2050030/.local/bin/llama-server")]
     pub llama_path: String,
+
+    /// Path to SSH private key for Git push authentication.
+    /// If omitted, Git persistence is skipped.
+    #[arg(long)]
+    pub git_ssh_key: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -269,19 +274,24 @@ pub fn run() -> Result<()> {
         let succeeded = qc.check_succeeded_full(&job.project)?;
         if succeeded {
             qc.remove_job(&member)?;
-            with_cleanup(|s| s.slurm_job_id = None);
             eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
 
-            // 13. Persist synthesis results to Git.
-            let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
-            let iteration = job_id as u64;
-            let commit_message = format!(
-                "Synthesis: {model_name} iteration {iteration} seed {seed}"
-            );
-            let git = git_persistence::GitPersistence::new(&project_dir)
-                .context("git persistence setup failed")?;
-            git.persist_synthesis(model_name, iteration, seed, &commit_message)
-                .context("failed to persist synthesis to git")?;
+            // 13. Persist synthesis results to Git (only if SSH key provided).
+            if let Some(ref git_ssh_key) = args.git_ssh_key {
+                let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.clone());
+                let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
+                let iteration = job_id as u64;
+                let commit_message = format!(
+                    "Synthesis: {model_name} iteration {iteration} seed {seed}"
+                );
+                let git = git_persistence::GitPersistence::new(&project_dir, &auth_config)
+                    .context("git persistence setup failed")?;
+                git.persist_synthesis(model_name, iteration, seed, &commit_message)
+                    .context("failed to persist synthesis to git")?;
+            }
+
+            // Slurm cleanup only after git persistence completes.
+            with_cleanup(|s| s.slurm_job_id = None);
         } else {
             bail!("synthesis not successful for {member}, job remains in queue");
         }
