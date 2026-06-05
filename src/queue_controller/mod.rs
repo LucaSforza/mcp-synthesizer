@@ -27,6 +27,7 @@ struct CleanupState {
     project_dir: Option<PathBuf>,
     settings_backup: Option<PathBuf>,
     claude_child_pid: Option<u32>,
+    orig_branch: Option<(PathBuf, String)>,  // (project_dir, branch_name) to restore on failure
 }
 
 static CLEANUP: Mutex<Option<CleanupState>> = Mutex::new(None);
@@ -57,6 +58,14 @@ fn do_cleanup(state: &CleanupState) {
         eprintln!("[CLEANUP] Restored claude settings");
     }
 
+    if let Some((ref project_dir, ref branch_name)) = state.orig_branch {
+        if let Ok(repo) = git2::Repository::open(project_dir) {
+            let _ = repo.set_head(&format!("refs/heads/{}", branch_name));
+            let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
+            eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
+        }
+    }
+
     eprintln!("[CLEANUP] Graceful shutdown complete");
 }
 
@@ -70,7 +79,8 @@ impl Drop for CleanupGuard {
         {
             let has_work = state.claude_child_pid.is_some()
                 || state.slurm_job_id.is_some()
-                || state.project_dir.is_some();
+                || state.project_dir.is_some()
+                || state.orig_branch.is_some();
             if has_work {
                 do_cleanup(state);
             }
@@ -143,6 +153,7 @@ pub fn run() -> Result<()> {
         project_dir: None,
         settings_backup: None,
         claude_child_pid: None,
+        orig_branch: None,
     });
 
     let mut signals = Signals::new(&[SIGINT, SIGTERM])
@@ -242,6 +253,23 @@ pub fn run() -> Result<()> {
             s.project_dir = Some(project_dir.clone());
         });
 
+        // 8b. Create synthesis branch and checkout (before Claude Code).
+        let mut synthesis_branch: Option<(String, String)> = None; // (orig_branch, branch_name)
+        let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
+        let iteration = job_id as u64;
+        if let Some(ref git_ssh_key) = args.git_ssh_key {
+            let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.clone());
+            let git = git_persistence::GitPersistence::new(&project_dir, &auth_config)
+                .context("git persistence setup failed")?;
+            let (orig_branch, branch_name) = git
+                .checkout_synthesis_branch(model_name, iteration, seed)
+                .context("failed to prepare git branch for synthesis")?;
+            with_cleanup(|s| {
+                s.orig_branch = Some((project_dir.clone(), orig_branch.clone()));
+            });
+            synthesis_branch = Some((orig_branch, branch_name));
+        }
+
         // 9. Kill stale mcp_synth and launch Claude Code.
         claude::kill_existing_mcp_synth();
         eprintln!("[DEBUG] Launching Claude Code...");
@@ -264,6 +292,14 @@ pub fn run() -> Result<()> {
             s.project_dir = None;
         });
 
+        // 10b. Cancel Slurm job — model server no longer needed.
+        let slurm_job_id = CLEANUP.lock().ok().and_then(|mut guard| {
+            guard.as_mut().and_then(|s| s.slurm_job_id.take())
+        });
+        if let Some(ref job_id) = slurm_job_id {
+            slurm::cancel_job(&args.cluster_host, job_id);
+        }
+
         // 11. Bail if Claude Code failed.
         if !claude_status.success() {
             bail!("Claude Code exited with status {claude_status}");
@@ -276,22 +312,22 @@ pub fn run() -> Result<()> {
             qc.remove_job(&member)?;
             eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
 
-            // 13. Persist synthesis results to Git (only if SSH key provided).
-            if let Some(ref git_ssh_key) = args.git_ssh_key {
-                let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.clone());
-                let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
-                let iteration = job_id as u64;
+            // 13. Commit and push synthesis results to Git.
+            if let Some((ref orig_branch, ref branch_name)) = synthesis_branch {
+                let auth_config = git_persistence::GitAuthConfig::new(
+                    args.git_ssh_key.clone().expect("git_ssh_key checked above"),
+                );
                 let commit_message = format!(
                     "Synthesis: {model_name} iteration {iteration} seed {seed}"
                 );
                 let git = git_persistence::GitPersistence::new(&project_dir, &auth_config)
                     .context("git persistence setup failed")?;
-                git.persist_synthesis(model_name, iteration, seed, &commit_message)
+                git.commit_and_push(branch_name, orig_branch, &commit_message)
                     .context("failed to persist synthesis to git")?;
+                with_cleanup(|s| s.orig_branch = None);
             }
 
-            // Slurm cleanup only after git persistence completes.
-            with_cleanup(|s| s.slurm_job_id = None);
+            // 14. Loop to next job.
         } else {
             bail!("synthesis not successful for {member}, job remains in queue");
         }

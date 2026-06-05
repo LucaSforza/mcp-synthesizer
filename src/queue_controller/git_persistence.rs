@@ -44,25 +44,23 @@ impl GitPersistence {
         Ok(Self { repo, authenticator })
     }
 
-    /// Commit all synthesis output changes on a new branch and push to origin.
+    /// Phase 1 — create synthesis branch and checkout (run BEFORE Claude Code).
     ///
-    /// Steps performed in order:
+    /// Steps performed:
     ///   1. Record current HEAD shorthand.
     ///   2. Build branch name (sanitize model_name for git ref validity).
     ///   3. Check if target branch already exists (fail-fast).
     ///   4. Create new branch from HEAD commit.
     ///   5. Checkout new branch.
-    ///   6. Stage all files (`git add -A` equivalent).
-    ///   7. Create commit with caller-provided message.
-    ///   8. Push to origin and set upstream tracking.
-    ///   9. Checkout original branch (restore working tree).
-    pub fn persist_synthesis(
+    ///
+    /// Returns `(orig_branch, branch_name)` so the caller can pass them to
+    /// `commit_and_push()` after the synthesis completes.
+    pub fn checkout_synthesis_branch(
         &self,
         model_name: &str,
         iteration: u64,
         seed: u64,
-        commit_message: &str,
-    ) -> Result<()> {
+    ) -> Result<(String, String)> {
         // -- Step 1: Store original branch ------------------------------------
         let head = self
             .repo
@@ -120,6 +118,23 @@ impl GitPersistence {
             .with_context(|| format!("failed to checkout branch '{branch_name}'"))?;
         eprintln!("[DEBUG] Git: checked out branch '{branch_name}'");
 
+        Ok((orig_branch, branch_name))
+    }
+
+    /// Phase 2 — stage, commit, push, and restore original branch
+    /// (run AFTER successful synthesis, on the branch already checked out).
+    ///
+    /// Steps performed:
+    ///   6. Stage all files (`git add -A` equivalent).
+    ///   7. Create commit with caller-provided message.
+    ///   8. Push to origin and set upstream tracking.
+    ///   9. Checkout original branch (restore working tree).
+    pub fn commit_and_push(
+        &self,
+        branch_name: &str,
+        orig_branch: &str,
+        commit_message: &str,
+    ) -> Result<()> {
         // -- Step 6: Stage all changes (git add -A equivalent) ---------------
         let mut index = self
             .repo
@@ -153,6 +168,16 @@ impl GitPersistence {
             .repo
             .signature()
             .context("failed to read git signature (check git config user.name and user.email)")?;
+
+        // Find HEAD commit as parent.
+        let head = self
+            .repo
+            .head()
+            .context("no HEAD reference for commit parent")?;
+        let head_commit = head
+            .peel_to_commit()
+            .context("failed to resolve HEAD to a commit object")?;
+
         let commit_oid = self
             .repo
             .commit(
@@ -167,10 +192,10 @@ impl GitPersistence {
         eprintln!("[DEBUG] Git: created commit {commit_oid}: '{commit_message}'");
 
         // -- Step 8: Push to origin + set upstream tracking ------------------
-        let push_result = self.push_and_set_upstream(&branch_name);
+        let push_result = self.push_and_set_upstream(branch_name);
 
         // Always restore original branch before propagating any error.
-        self.restore_original_branch(&orig_branch)?;
+        self.restore_original_branch(orig_branch)?;
 
         push_result?;
         Ok(())
