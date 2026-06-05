@@ -583,6 +583,11 @@ pub fn run() -> Result<()> {
 
         let claude_status = claude_child
             .wait()
+            // TODO: Invece di mettere un wait, bisogna far
+            // entrare il controller in un pooling. Da un lato
+            // nel pooling controlliamo se il job claude sia
+            // finito, e poi controlliamo che nel cluster vada
+            // tutto bene. Gestire poi i diversi casi.
             .context("failed to wait for Claude Code")?;
         with_cleanup(|s| s.claude_child_pid = None);
 
