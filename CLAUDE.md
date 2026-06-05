@@ -260,6 +260,8 @@ cluster_runs                                         -> Sorted Set (member="{mod
 10. Restore original settings.local.json from backup
 11. `check_succeeded_full()` → if true, ZREM removes job from queue; if false, bail (job stays)
 
+**Signal handling:** Registers for SIGINT and SIGTERM via `signal-hook`. On signal: kill claude child → scancel Slurm job → restore settings → exit. Cleanup state (`CleanupState` struct in `static Mutex`) populated incrementally as steps progress.
+
 ```bash
 queue_controller \
     --models-path ~/dll/llm/models \
@@ -307,6 +309,8 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `::redis::Commands` / `::redis::RedisError` qualified paths (edition 2024 module name collision with `db::redis` submodule)
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
 - `eprintln!` debug logging with `[DEBUG]` prefix throughout
+- `signal-hook::iterator::Signals` for SIGINT/SIGTERM handling in a dedicated thread (self-pipe mechanism)
+- `static Mutex<Option<CleanupState>>` for graceful shutdown state shared between main loop and signal handler
 - Edition 2024, musl target for static linking
 
 ## Dependencies
@@ -319,4 +323,5 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `chrono` — ISO 8601 timestamps for created_at
 - `rusqlite` — SQLite, `bundled` feature embeds libsqlite3 (unconditional)
 - `rand_chacha`/`rand_core` — deterministic RNG for `populate_queue` seed generation
+- `signal-hook` — SIGINT/SIGTERM handling for queue_controller graceful shutdown
 - `tempfile` — temp DBs in tests (dev-dependency only)

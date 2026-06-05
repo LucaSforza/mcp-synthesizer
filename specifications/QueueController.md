@@ -210,6 +210,25 @@ claude -p \
 - If backup exists: copy back, remove backup
 - If no backup (file was created by us): delete `settings.local.json`
 
+### 11b. Signal Handling (Graceful Shutdown)
+
+`queue_controller` registers handlers for **SIGINT** (Ctrl+C) and **SIGTERM** (`kill`/`pkill`). On signal:
+
+1. `kill(claude_child_pid)` — terminate Claude Code if running
+2. `ssh cluster scancel {slurm_job_id}` — free GPU node on cluster
+3. `restore_claude_settings()` — restore original `settings.local.json`, remove `mcp_config.json`
+4. `process::exit(128 + signal)` — exit with correct signal exit code
+
+Cleanup state is tracked incrementally in a `static Mutex<Option<CleanupState>>`:
+
+| Field | Set After | Reset After |
+|-------|-----------|-------------|
+| `slurm_job_id` | sbatch submission succeeds | ZREM on success |
+| `project_dir` + `settings_backup` | settings backup created | settings restored (step 11) |
+| `claude_child_pid` | `claude` spawned | child exits normally |
+
+Signal handler runs in a **separate thread** (via `signal-hook`'s self-pipe mechanism), allowing the handler to lock the Mutex and perform I/O safely.
+
 ### 12. Check Synthesis Result
 
 Query Redis for latest trial of this project:
@@ -309,6 +328,7 @@ No retry logic. No skip-to-next-job. Operator intervention required.
 - `redis` crate (pure Rust, no system dep)
 - `clap` for CLI
 - `serde_json` for settings file manipulation
+- `signal-hook` for SIGINT/SIGTERM handling (self-pipe thread mechanism)
 - `rand_chacha` / `rand_core` (only in companion `populate_queue` binary)
 - `anyhow` for error handling
 
