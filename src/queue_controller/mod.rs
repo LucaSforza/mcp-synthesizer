@@ -523,15 +523,12 @@ pub fn run() -> Result<()> {
         let iteration = job_id as u64;
 
         // Set per-job debug prefix for all subsequent debug_log calls.
-        *JOB_PREFIX.lock().unwrap() = format!("[job:{}:{}]", model_name, job_id_str);
+        *JOB_PREFIX.lock().unwrap() = format!("[job:{}]", job_id_str);
 
         // ------------------------------------------------------------------
         // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
         // ------------------------------------------------------------------
-        eprintln!(
-            "\n{}",
-            "=".repeat(80)
-        );
+        eprintln!("\n{}", "=".repeat(80));
         eprintln!(
             "===== Job {}:{} (seed {}, iteration {}) =====",
             model_name, job_id_str, seed, iteration,
