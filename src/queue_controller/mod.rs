@@ -10,6 +10,8 @@ mod slurm;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::iterator::Signals;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -124,14 +126,18 @@ pub fn run() -> Result<()> {
         claude_child_pid: None,
     });
 
-    ctrlc::set_handler(move || {
-        let guard = CLEANUP.lock().unwrap();
-        if let Some(ref state) = *guard {
-            do_cleanup(state);
+    let mut signals = Signals::new(&[SIGINT, SIGTERM])
+        .context("failed to register signal handlers")?;
+    std::thread::spawn(move || {
+        for sig in signals.forever() {
+            eprintln!("[DEBUG] Received signal {sig}, cleaning up...");
+            let guard = CLEANUP.lock().unwrap();
+            if let Some(ref state) = *guard {
+                do_cleanup(state);
+            }
+            std::process::exit(128 + sig);
         }
-        std::process::exit(0);
-    })
-    .context("failed to register signal handler")?;
+    });
 
     let mut qc = queue::QueueClient::open(&args.redis_url)?;
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
