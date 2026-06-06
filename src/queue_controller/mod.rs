@@ -421,6 +421,9 @@ pub fn run(args: Args) -> Result<()> {
             args.tunnel_port,
         )?;
 
+        // Wait for model server to be ready before allocating local resources.
+        health::wait_for_model_endpoint(&args.model_url, args.poll_interval, args.poll_timeout)?;
+
         // ------------------------------------------------------------------
         // Phase 3 — Prepare local environment (Step 7+7b, Step 8+8b)
         // ------------------------------------------------------------------

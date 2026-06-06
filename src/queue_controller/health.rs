@@ -7,6 +7,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread::sleep;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -217,4 +219,63 @@ pub fn run_job_preflight_checks(
     }
 
     Ok(())
+}
+
+/// Poll the model server endpoint until it responds with HTTP 200 or timeout.
+///
+/// Runs after the SSH tunnel is established, before launching Claude Code.
+/// This prevents Claude from starting while the model server is still loading.
+pub fn wait_for_model_endpoint(
+    model_url: &str,
+    poll_interval: u64,
+    poll_timeout: u64,
+) -> Result<()> {
+    let health_url = format!("{}/models", model_url.trim_end_matches('/'));
+    let max_attempts = if poll_interval == 0 {
+        u64::MAX
+    } else {
+        poll_timeout.div_ceil(poll_interval)
+    };
+
+    eprintln!("[HEALTH] Waiting for model endpoint at {health_url}...");
+
+    for attempt in 0..max_attempts {
+        let output = Command::new("curl")
+            .args([
+                "-s",
+                "-o", "/dev/null",
+                "-w", "%{http_code}",
+                &health_url,
+            ])
+            .output();
+
+        match output {
+            Ok(out) => {
+                let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if status == "200" {
+                    eprintln!("[HEALTH] Model endpoint ready (HTTP 200)");
+                    return Ok(());
+                }
+                eprintln!(
+                    "[DEBUG] Model endpoint returned HTTP {}, retry {}/{}",
+                    status,
+                    attempt + 1,
+                    max_attempts,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[DEBUG] Model endpoint check failed (attempt {}/{}): {e}",
+                    attempt + 1,
+                    max_attempts,
+                );
+            }
+        }
+
+        sleep(Duration::from_secs(poll_interval));
+    }
+
+    bail!(
+        "model endpoint at {health_url} not ready within {poll_timeout}s"
+    );
 }
