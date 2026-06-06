@@ -129,7 +129,7 @@ pub fn spawn_claude(
         "--output-format",
         "stream-json",
         "--dangerously-skip-permissions",
-        "--include-hook-events",
+        // "--include-hook-events",
         "--verbose",
         "--mcp-config",
         &mcp_config_str,

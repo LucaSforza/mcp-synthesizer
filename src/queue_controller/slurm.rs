@@ -160,12 +160,14 @@ pub fn submit_sbatch(cluster_host: &str, sbatch_content: &str) -> Result<String>
 }
 
 /// Check state of the job in the cluster.
-fn check_job(cluster_host: &str, job_id: &str, attempt: u64) -> Result<()> {
+/// Returns `Ok(true)` if RUNNING (caller should stop polling),
+/// `Ok(false)` if still pending, `Err` on terminal states.
+fn check_job(cluster_host: &str, job_id: &str, attempt: u64) -> Result<bool> {
     let state = get_job_state(cluster_host, job_id)?;
     match state {
         JobState::Running => {
             eprintln!("[DEBUG] Job {job_id} is RUNNING");
-            return Ok(());
+            return Ok(true);
         }
         JobState::Completed => {
             bail!("job {job_id} already COMPLETED (model server exited early)");
@@ -189,7 +191,7 @@ fn check_job(cluster_host: &str, job_id: &str, attempt: u64) -> Result<()> {
             );
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 /// Poll Slurm via `ssh cluster squeue` until job reaches RUNNING or terminal state.
@@ -206,7 +208,9 @@ pub fn poll_job(
     };
 
     for attempt in 0..max_polls {
-        check_job(cluster_host, job_id, attempt)?;
+        if check_job(cluster_host, job_id, attempt)? {
+            return Ok(());
+        }
         sleep(Duration::from_secs(interval_secs));
     }
 

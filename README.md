@@ -102,6 +102,7 @@ Six result types: `failed_compilation`, `failed_fuzzing`, `succeeded_fuzzing`, `
 ### Claude Code Integration
 
 Add project-level:
+
 ```bash
 claude mcp add --transport stdio --scope project solidity-synthesis \
   "cargo run --manifest-path ./Cargo.toml -- \
@@ -109,6 +110,7 @@ claude mcp add --transport stdio --scope project solidity-synthesis \
 ```
 
 Add user-global:
+
 ```bash
 claude mcp add --transport stdio --scope user solidity-synthesis \
   "cargo run --manifest-path /abs/path/to/mcp-synthesizer/Cargo.toml -- \
@@ -116,6 +118,7 @@ claude mcp add --transport stdio --scope user solidity-synthesis \
 ```
 
 Remove:
+
 ```bash
 claude mcp remove solidity-synthesis
 ```
@@ -311,31 +314,6 @@ JOIN test_run tr ON tr.project_id = p.id
 GROUP BY p.name;
 ```
 
----
-
-## Project Structure
-
-```
-src/
-├── main.rs                     # mcp_synth entry point
-├── bin/
-│   ├── queue_controller.rs     # queue_controller entry point
-│   ├── populate_queue.rs       # populate_queue entry point
-│   └── migrate_sqlite_to_redis.rs  # migrate entry point
-├── queue_controller/
-│   ├── mod.rs                  # Orchestrator loop + Args
-│   ├── queue.rs                # Redis queue client
-│   ├── slurm.rs                # Sbatch gen + Slurm SSH
-│   └── claude.rs               # MCP settings + Claude Code launch
-├── db/
-│   ├── mod.rs                  # Database trait, DbError, DbConfig, data structs
-│   ├── redis.rs                # RedisDatabase implementation
-│   ├── sqlite.rs               # SqliteDatabase implementation
-│   ├── redis_test.rs           # Redis tests (FLUSHDB on DB 1)
-│   └── sqlite_test.rs          # SQLite tests (:memory:)
-├── tools.rs                    # MCP tools (forge_install, forge_build, forge_test, run_synthesis)
-├── pipeline.rs                 # Build → test → halmos orchestration
-└── pipeline_test.rs            # Pipeline tests with mock commands
 ```
 
 ## Development

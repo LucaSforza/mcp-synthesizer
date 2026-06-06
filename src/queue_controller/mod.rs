@@ -390,18 +390,21 @@ pub fn run(args: Args) -> Result<()> {
         let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
         let iteration = job_id as u64;
 
-        // Set per-job debug prefix for all subsequent debug_log calls.
-        log_ctx::set(&job_id_str);
-
-        // ------------------------------------------------------------------
-        // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
-        // ------------------------------------------------------------------
+        // Print job separator banner BEFORE setting per-job prefix, so it
+        // stands out as the first visual element for this job.
         eprintln!("\n{}", "=".repeat(80));
         eprintln!(
             "===== Job {}:{} (seed {}, iteration {}) =====",
             model_name, job_id_str, seed, iteration,
         );
         eprintln!("{}", "=".repeat(80));
+
+        // Set per-job debug prefix for all subsequent debug_log calls.
+        log_ctx::set(&job_id_str);
+
+        // ------------------------------------------------------------------
+        // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
+        // ------------------------------------------------------------------
 
         let slurm_job_id = submit_slurm_job(
             &args.cluster_host,
