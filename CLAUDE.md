@@ -230,7 +230,6 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 |------|----------------|-------|
 | `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14) | ~480 |
 | `cleanup.rs` | Resource lifecycle: `CleanupState`, `CLEANUP`, `do_cleanup`, `CleanupGuard`, `cleanup_and_reset` | ~90 |
-| `log_ctx.rs` | Job-context logging: `JOB_PREFIX`, `set()`, `clear()` | ~35 |
 | `claude.rs` | Claude Code subprocess + settings management | ~160 |
 | `git_persistence.rs` | Git branch, commit, push via `git2` | ~270 |
 | `queue.rs` | Redis queue client (`QueueClient`) | ~120 |
@@ -242,7 +241,6 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 **Design principles:**
 - `mod.rs` reads like an execution script — `run()` + step functions are the flow
 - `cleanup.rs` owns all resource lifecycle (isolated from orchestration)
-- `log_ctx.rs` owns the per-job debug prefix (`[job:id]`)
 - `health.rs` owns environment validation (separated from orchestration)
 - `Args` (CLI definition) lives in the binary file, not in `mod.rs`
 - All step functions call into lower modules; they never implement infrastructure
@@ -293,7 +291,7 @@ cluster_runs                                         -> Sorted Set (member="{mod
 | 7 | 13 | `persist_usage_to_redis` | Parse stream-json output, write usage to test_run |
 | 7 | 14 | `push_synthesis_to_git` | Stage, commit, push, restore original branch |
 
-**Logging:** `debug_log!` macro prepends `[job:id]` to every `[DEBUG]`/`[WARN]` line inside a job context. Set via `log_ctx::set(id)` at Phase 2 start, cleared in `cleanup_and_reset`. Separator banners (`===== Job ... =====`) printed with plain `eprintln!` — no prefix, they are the visual delimiter.
+**Logging:** All debug output uses plain `eprintln!` — no per-job prefix. Separator banners (`===== Job ... =====`) printed at start/end of each job iteration for visual separation.
 
 **Cleanup lifecycle:** `CleanupState` (in `cleanup.rs`) is populated incrementally as each step acquires a resource. Three paths drain it:
 - **Happy path**: `cleanup_environment` + `cleanup_and_reset` at end of loop iteration
@@ -367,13 +365,11 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `Box<dyn Database>` trait objects in `Mutex` for rmcp compatibility
 - `::redis::Commands` / `::redis::RedisError` qualified paths (edition 2024 module name collision with `db::redis` submodule)
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
-- `debug_log!` macro for job-context debug logging (`[job:id]` prefix on every `[DEBUG]`/`[WARN]` line during a job). Defined in `mod.rs`, re-exported via `pub(crate) use debug_log;` for child module access. Call sites must have `JOB_PREFIX` in scope (macro hygiene — bare identifiers resolve at call site)
 - `signal-hook::iterator::Signals` for SIGINT/SIGTERM handling in a dedicated thread (self-pipe mechanism)
 - `auth-git2::GitAuthenticator` for deterministic SSH key authentication (no ssh-agent)
 - Two-phase Git API: `checkout_synthesis_branch()` before Claude Code, `commit_and_push()` after success
 - `static Mutex<Option<CleanupState>>` for graceful shutdown state shared between main loop and signal handler
 - Separate `cleanup.rs` module for all resource lifecycle management (CleanupState, CLEANUP, do_cleanup, CleanupGuard, cleanup_and_reset)
-- Separate `log_ctx.rs` module for job-context prefix (JOB_PREFIX, set(), clear())
 - `SynthesisMonitor` in `synthesis_monitor.rs` — dedicated component for Claude Code + Slurm job monitoring during synthesis. Owns tunnel handle, polls both processes via `try_wait()`/`get_job_state()`, recovers model server on Slurm expiry via `recover()` (resubmit sbatch + re-establish tunnel + sync CleanupState). Replaces blocking `claude_child.wait()` with polling loop
 - `JobState::is_terminal()` on `slurm::JobState` — classifies terminal states (Completed, Failed, Cancelled, Timeout, NotFound) for expiry detection. `get_job_state` made `pub(crate)` for monitor access
 - `health.rs` three-level validation: `run_startup_checks` (once before loop), `run_loop_checks` (every iteration), `run_job_preflight_checks` (after job load, before Slurm). Each check is a private function with `[HEALTH]` prefixed logging, called from public orchestrator functions that bail on first failure

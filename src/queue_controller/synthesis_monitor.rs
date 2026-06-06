@@ -12,8 +12,6 @@ use std::time::Duration;
 use anyhow::Result;
 
 use super::cleanup::with_cleanup;
-use super::debug_log;
-use super::log_ctx::JOB_PREFIX;
 use super::slurm::{self, TunnelHandle};
 
 /// Monitors Claude Code execution and Slurm job health.
@@ -80,7 +78,7 @@ impl SynthesisMonitor {
             // Check Claude Code exit status (non-blocking).
             match claude_child.try_wait() {
                 Ok(Some(status)) => {
-                    debug_log!("[DEBUG] Claude Code exited with status {status}");
+                    eprintln!("[DEBUG] Claude Code exited with status {status}");
                     return Ok(status);
                 }
                 Ok(None) => { /* still running */ }
@@ -93,7 +91,7 @@ impl SynthesisMonitor {
             match slurm::get_job_state(&self.cluster_host, &self.slurm_job_id) {
                 Ok(ref state) => {
                     if state.is_terminal() {
-                        debug_log!(
+                        eprintln!(
                             "[DEBUG] Slurm job {} entered terminal state {state}, recovering...",
                             self.slurm_job_id,
                         );
@@ -101,7 +99,7 @@ impl SynthesisMonitor {
                     }
                 }
                 Err(e) => {
-                    debug_log!("[WARN] Failed to check Slurm job state: {e:#}");
+                    eprintln!("[WARN] Failed to check Slurm job state: {e:#}");
                 }
             }
 
@@ -111,13 +109,13 @@ impl SynthesisMonitor {
 
     /// Resubmit the model-serving job and re-establish the SSH tunnel.
     fn recover(&mut self) -> Result<()> {
-        debug_log!("[RECOVERY] Submitting new Slurm job...");
+        eprintln!("[RECOVERY] Submitting new Slurm job...");
         let model_path = self.models_path.join(&self.model_name);
         let sbatch = slurm::generate_sbatch(&model_path, &self.llama_path, &self.seed);
         let new_job_id = slurm::submit_sbatch(&self.cluster_host, &sbatch)?;
-        debug_log!("[RECOVERY] Submitted new Slurm job {new_job_id}");
+        eprintln!("[RECOVERY] Submitted new Slurm job {new_job_id}");
 
-        debug_log!("[RECOVERY] Waiting for new job to reach RUNNING...");
+        eprintln!("[RECOVERY] Waiting for new job to reach RUNNING...");
         slurm::poll_job(
             &self.cluster_host,
             &new_job_id,
@@ -128,7 +126,7 @@ impl SynthesisMonitor {
         let node_name = slurm::get_job_node(&self.cluster_host, &new_job_id)?;
         let node_ip = slurm::node_name_to_ip(&node_name);
         let new_tunnel = slurm::establish_tunnel(&self.cluster_host, &node_ip, self.tunnel_port)?;
-        debug_log!(
+        eprintln!(
             "[RECOVERY] New SSH tunnel established to {node_ip}:{}",
             self.tunnel_port,
         );
@@ -139,7 +137,7 @@ impl SynthesisMonitor {
 
         // Sync cleanup state so signal/guard cancels the right job.
         with_cleanup(|s| s.slurm_job_id = Some(self.slurm_job_id.clone()));
-        debug_log!(
+        eprintln!(
             "[RECOVERY] Model server recovered, job {}",
             self.slurm_job_id,
         );

@@ -10,7 +10,6 @@ use std::process::Command;
 use std::sync::Mutex;
 
 use super::claude;
-use super::log_ctx;
 use super::slurm;
 
 // ---------------------------------------------------------------------------
@@ -102,8 +101,7 @@ impl Drop for CleanupGuard {
 // Per-iteration reset
 // ---------------------------------------------------------------------------
 
-/// Run pending cleanup actions, reset per-iteration state, and clear the
-/// job context prefix so the next loop iteration starts with clean state.
+/// Run pending cleanup actions and reset per-iteration state.
 pub(crate) fn cleanup_and_reset(state: &mut CleanupState) {
     do_cleanup(state);
     state.slurm_job_id = None;
@@ -111,5 +109,4 @@ pub(crate) fn cleanup_and_reset(state: &mut CleanupState) {
     state.settings_backup = None;
     state.claude_child_pid = None;
     state.orig_branch = None;
-    log_ctx::clear();
 }

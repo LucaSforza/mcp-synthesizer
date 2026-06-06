@@ -11,7 +11,6 @@ mod slurm;
 mod synthesis_usage;
 
 mod cleanup;
-mod log_ctx;
 mod synthesis_monitor;
 mod health;
 
@@ -24,20 +23,7 @@ use self::cleanup::{
     CLEANUP, CleanupGuard, CleanupState, cleanup_and_reset, do_cleanup, take_slurm_job_id,
     with_cleanup,
 };
-use self::log_ctx::JOB_PREFIX;
 use crate::Args;
-
-/// Like `eprintln!` but prepends `[job:id]` from [`JOB_PREFIX`] if set.
-macro_rules! debug_log {
-    ($($arg:tt)*) => {{
-        let _guard = JOB_PREFIX.lock().unwrap();
-        if !_guard.is_empty() {
-            eprint!("{} ", _guard);
-        }
-        eprintln!($($arg)*);
-    }};
-}
-pub(crate) use debug_log;
 
 // ---------------------------------------------------------------------------
 // Loop step functions (in execution order)
@@ -91,13 +77,13 @@ fn submit_slurm_job(
     llama_path: &str,
     seed: &str,
 ) -> Result<String> {
-    debug_log!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
+    eprintln!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
     let model_path = models_path.join(model_name);
-    debug_log!("[DEBUG] Model path: {model_path:?}");
+    eprintln!("[DEBUG] Model path: {model_path:?}");
 
     let sbatch = slurm::generate_sbatch(&model_path, llama_path, seed);
     let slurm_job_id = slurm::submit_sbatch(cluster_host, &sbatch)?;
-    debug_log!("[DEBUG] Submitted Slurm job {slurm_job_id}");
+    eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
     Ok(slurm_job_id)
 }
 
@@ -113,7 +99,7 @@ fn wait_and_create_tunnel(
     poll_timeout: u64,
     tunnel_port: u16,
 ) -> Result<slurm::TunnelHandle> {
-    debug_log!(
+    eprintln!(
         "[DEBUG] [Step 6] wait_and_create_tunnel — poll job status, resolve node IP, establish SSH tunnel"
     );
     slurm::poll_job(cluster_host, slurm_job_id, poll_interval, poll_timeout)?;
@@ -129,27 +115,27 @@ fn prepare_project_environment(
     project_root: &Path,
     project_name: &str,
 ) -> Result<(PathBuf, String)> {
-    debug_log!(
+    eprintln!(
         "[DEBUG] [Step 7+7b] prepare_project_environment — resolve project dir, read prompt.md"
     );
     let project_dir = claude::resolve_project_dir(project_root, project_name);
     if !project_dir.exists() {
         bail!("project directory not found: {project_dir:?}");
     }
-    debug_log!("[DEBUG] Project dir: {project_dir:?}");
+    eprintln!("[DEBUG] Project dir: {project_dir:?}");
 
     let system_prompt_path = project_dir.join("prompt.md");
     let system_prompt = if system_prompt_path.exists() {
         std::fs::read_to_string(&system_prompt_path)
             .with_context(|| format!("failed to read {system_prompt_path:?}"))?
     } else {
-        debug_log!(
+        eprintln!(
             "[WARN] No prompt.md found at {system_prompt_path:?}, \
              --append-system-prompt omitted"
         );
         String::new()
     };
-    debug_log!(
+    eprintln!(
         "[DEBUG] System prompt (prompt.md): {} bytes",
         system_prompt.len()
     );
@@ -171,7 +157,7 @@ fn setup_claude_and_git(
     seed: u64,
     iteration: u64,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
-    debug_log!(
+    eprintln!(
         "[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch"
     );
     // Step 8: inject MCP settings (backup existing).
@@ -216,9 +202,9 @@ fn run_claude_code(
     model_name: &str,
     job_id_str: &str,
 ) -> Result<(std::process::Child, PathBuf)> {
-    debug_log!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
+    eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
-    debug_log!("[DEBUG] Launching Claude Code...");
+    eprintln!("[DEBUG] Launching Claude Code...");
     let output_path = project_dir.join(format!("{}_{}.jsonl", model_name, job_id_str));
     let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, model_name)?;
     Ok((child, output_path))
@@ -231,7 +217,7 @@ fn cleanup_environment(
     backup: Option<PathBuf>,
     cluster_host: &str,
 ) -> Result<()> {
-    debug_log!(
+    eprintln!(
         "[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job"
     );
     // Step 10: restore settings.
@@ -245,7 +231,7 @@ fn cleanup_environment(
     if let Some(ref job_id) = take_slurm_job_id() {
         slurm::cancel_job(cluster_host, job_id);
     } else {
-        debug_log!("[WARN] no slurm job id to cancel");
+        eprintln!("[WARN] no slurm job id to cancel");
     }
 
     Ok(())
@@ -262,11 +248,11 @@ fn check_claude_result(
     project_name: &str,
     member: &str,
 ) -> Result<()> {
-    debug_log!("[DEBUG] [Step 11] check_claude_result — verify exit status + succeeded_full");
+    eprintln!("[DEBUG] [Step 11] check_claude_result — verify exit status + succeeded_full");
     if !claude_status.success() {
         bail!("Claude Code exited with status {claude_status}");
     }
-    debug_log!("[DEBUG] Saved synthesis output to {output_path:?}");
+    eprintln!("[DEBUG] Saved synthesis output to {output_path:?}");
 
     if !qc.check_succeeded_full(project_name)? {
         bail!("synthesis not successful for {member}, job remains in queue");
@@ -277,9 +263,9 @@ fn check_claude_result(
 
 /// Step 12: Remove successfully completed job from Redis queue.
 fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()> {
-    debug_log!("[DEBUG] [Step 12] remove_job_from_queue — synthesis succeeded");
+    eprintln!("[DEBUG] [Step 12] remove_job_from_queue — synthesis succeeded");
     qc.remove_job(member)?;
-    debug_log!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
+    eprintln!("[DEBUG] Synthesis succeeded for {member}, removed from queue");
     Ok(())
 }
 
@@ -288,12 +274,12 @@ fn remove_job_from_queue(qc: &mut queue::QueueClient, member: &str) -> Result<()
 ///
 /// All errors are non-fatal (logged as WARN).
 fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &str) {
-    debug_log!(
+    eprintln!(
         "[DEBUG] [Step 13] persist_usage_to_redis — parse Claude Code output, write usage to Redis"
     );
     match synthesis_usage::parse_output_file(output_path) {
         Ok(usage) => {
-            debug_log!(
+            eprintln!(
                 "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
                 usage.input_tokens,
                 usage.output_tokens,
@@ -306,13 +292,13 @@ fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &st
                         project_name,
                         &usage,
                     ) {
-                        debug_log!("[WARN] Failed to write usage to test_run: {e:#}");
+                        eprintln!("[WARN] Failed to write usage to test_run: {e:#}");
                     }
                 }
-                Err(e) => debug_log!("[WARN] Failed to connect to Redis for usage write: {e:#}"),
+                Err(e) => eprintln!("[WARN] Failed to connect to Redis for usage write: {e:#}"),
             }
         }
-        Err(e) => debug_log!(
+        Err(e) => eprintln!(
             "[WARN] Failed to parse usage from {}: {e:#}",
             output_path.display(),
         ),
@@ -330,7 +316,7 @@ fn push_synthesis_to_git(
     orig_branch: &str,
     branch_name: &str,
 ) -> Result<()> {
-    debug_log!("[DEBUG] [Step 14] push_synthesis_to_git — commit, push, restore branch");
+    eprintln!("[DEBUG] [Step 14] push_synthesis_to_git — commit, push, restore branch");
     let auth_config = git_persistence::GitAuthConfig::new(git_ssh_key.to_path_buf());
     let commit_message = format!("Synthesis: {model_name} iteration {iteration} seed {seed}");
     let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
@@ -405,8 +391,7 @@ pub fn run(args: Args) -> Result<()> {
         );
         eprintln!("{}", "=".repeat(80));
 
-        // Set per-job debug prefix for all subsequent debug_log calls.
-        log_ctx::set(&job_id_str);
+        eprintln!("[job:{}] Starting synthesis", job_id_str);
 
         // Run job preflight checks before allocating cluster resources.
         health::run_job_preflight_checks(
