@@ -510,6 +510,9 @@ pub fn run() -> Result<()> {
     let mut qc = queue::QueueClient::open(&args.redis_url)?;
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
 
+    // TODO: controlla che tutto funzioni prima di iniziare il loop. Non ha senso fallire durante
+    // le sintesi.
+
     loop {
         // ------------------------------------------------------------------
         // Phase 1 — Acquire job from Redis queue (Step 1-3)

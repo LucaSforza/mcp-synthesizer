@@ -1,6 +1,6 @@
 //! Sbatch generation and Slurm interaction via SSH.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
@@ -50,6 +50,19 @@ impl fmt::Display for JobState {
             JobState::Other(s) => write!(f, "{s}"),
             JobState::NotFound => write!(f, "NOT_FOUND"),
         }
+    }
+}
+
+/// Handle for SSH port forwarding tunnel. Kills tunnel on drop.
+pub struct TunnelHandle {
+    child: Child,
+}
+
+impl Drop for TunnelHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        eprintln!("[DEBUG] SSH tunnel closed");
     }
 }
 
@@ -132,6 +145,39 @@ pub fn submit_sbatch(cluster_host: &str, sbatch_content: &str) -> Result<String>
     Ok(job_id)
 }
 
+/// Check state of the job in the cluster.
+fn check_job(cluster_host: &str, job_id: &str, attempt: u64) -> Result<()> {
+    let state = get_job_state(cluster_host, job_id)?;
+    match state {
+        JobState::Running => {
+            eprintln!("[DEBUG] Job {job_id} is RUNNING");
+            return Ok(());
+        }
+        JobState::Completed => {
+            bail!("job {job_id} already COMPLETED (model server exited early)");
+        }
+        JobState::Failed => {
+            bail!("job {job_id} entered FAILED state");
+        }
+        JobState::Cancelled => {
+            bail!("job {job_id} was CANCELLED");
+        }
+        JobState::Timeout => {
+            bail!("job {job_id} timed out");
+        }
+        JobState::NotFound => {
+            bail!("job {job_id} not found in squeue");
+        }
+        JobState::Pending | JobState::Other(_) => {
+            eprintln!(
+                "[DEBUG] Job {job_id} state: {state} (attempt {})",
+                attempt + 1
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Poll Slurm via `ssh cluster squeue` until job reaches RUNNING or terminal state.
 pub fn poll_job(
     cluster_host: &str,
@@ -146,39 +192,14 @@ pub fn poll_job(
     };
 
     for attempt in 0..max_polls {
-        let state = get_job_state(cluster_host, job_id)?;
-        match state {
-            JobState::Running => {
-                eprintln!("[DEBUG] Job {job_id} is RUNNING");
-                return Ok(());
-            }
-            JobState::Completed => {
-                bail!("job {job_id} already COMPLETED (model server exited early)");
-            }
-            JobState::Failed => {
-                bail!("job {job_id} entered FAILED state");
-            }
-            JobState::Cancelled => {
-                bail!("job {job_id} was CANCELLED");
-            }
-            JobState::Timeout => {
-                bail!("job {job_id} timed out");
-            }
-            JobState::NotFound => {
-                bail!("job {job_id} not found in squeue");
-            }
-            JobState::Pending | JobState::Other(_) => {
-                eprintln!(
-                    "[DEBUG] Job {job_id} state: {state} (attempt {})",
-                    attempt + 1
-                );
-            }
-        }
+        check_job(cluster_host, job_id, attempt)?;
         sleep(Duration::from_secs(interval_secs));
     }
 
     bail!("job {job_id} did not reach RUNNING state within {timeout_secs}s");
 }
+
+// TODO: create pooling that check for claude code execution and cluster execution
 
 /// Get single job state via squeue.
 fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
@@ -204,11 +225,6 @@ fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
     stdout
         .parse::<JobState>()
         .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-/// Handle for SSH port forwarding tunnel. Kills tunnel on drop.
-pub struct TunnelHandle {
-    child: Child,
 }
 
 /// Get compute node hostname for a Slurm job via squeue, fallback to sacct.
@@ -297,12 +313,4 @@ pub fn cancel_job(cluster_host: &str, job_id: &str) {
         .stderr(Stdio::null())
         .status();
     eprintln!("[DEBUG] Cancelled Slurm job {job_id}");
-}
-
-impl Drop for TunnelHandle {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        eprintln!("[DEBUG] SSH tunnel closed");
-    }
 }

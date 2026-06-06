@@ -69,7 +69,7 @@ impl QueueClient {
         let max_id = match trial_ids
             .iter()
             .filter_map(|id| id.parse::<i64>().ok())
-            .max()
+            .max() // NOTE: qua è dove si romperebbe nel caso fai sintesi in parallelo
         {
             Some(id) => id,
             None => return Ok(false),
