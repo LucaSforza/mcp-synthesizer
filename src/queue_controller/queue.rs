@@ -59,7 +59,7 @@ impl QueueClient {
         Ok(())
     }
 
-    /// Check if latest synthesis trial for project was `succeeded_full`.
+    /// Check if the newest test_run for the project has a `succeeded_full` trial.
     pub fn check_succeeded_full(&mut self, project_name: &str) -> Result<bool> {
         let pid_key = format!("project:name:{project_name}");
         let project_id: Option<String> = redis::cmd("GET").arg(&pid_key).query(&mut self.conn)?;
@@ -68,27 +68,35 @@ impl QueueClient {
             None => return Ok(false),
         };
 
-        let trial_ids: Vec<String> = redis::cmd("SMEMBERS")
-            .arg(format!("synthesis_trial:by_project:{project_id}"))
+        // Find the newest test_run (highest ID) for this project.
+        let test_run_ids: Vec<String> = redis::cmd("SMEMBERS")
+            .arg(format!("test_run:by_project:{project_id}"))
             .query(&mut self.conn)?;
-
-        let max_id = match trial_ids
+        let max_test_run_id = match test_run_ids
             .iter()
             .filter_map(|id| id.parse::<i64>().ok())
-            .max() // NOTE: qua è dove si romperebbe nel caso fai sintesi in parallelo
+            .max()
         {
             Some(id) => id,
             None => return Ok(false),
         };
 
-        let fields: HashMap<String, String> = redis::cmd("HGETALL")
-            .arg(format!("synthesis_trial:{max_id}"))
+        // Check if any trial in that test_run has result_type == "succeeded_full".
+        let trial_ids: Vec<String> = redis::cmd("ZRANGE")
+            .arg(format!("synthesis_trial:by_test_run:{max_test_run_id}"))
+            .arg("0")
+            .arg("-1")
             .query(&mut self.conn)?;
-
-        match fields.get("result_type").map(|s| s.as_str()) {
-            Some("succeeded_full") => Ok(true),
-            _ => Ok(false),
+        for tid_str in &trial_ids {
+            let fields: HashMap<String, String> = redis::cmd("HGETALL")
+                .arg(format!("synthesis_trial:{tid_str}"))
+                .query(&mut self.conn)?;
+            if fields.get("result_type").map(|s| s.as_str()) == Some("succeeded_full") {
+                return Ok(true);
+            }
         }
+
+        Ok(false)
     }
 
     /// Load job metadata from Redis hash `{model_name}:{job_id}`.
