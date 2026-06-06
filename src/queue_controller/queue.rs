@@ -32,6 +32,12 @@ impl QueueClient {
         Ok(Self { conn })
     }
 
+    /// Lightweight connectivity check. Returns `Ok(())` if Redis responds.
+    pub fn ping(&mut self) -> Result<()> {
+        ::redis::cmd("PING").query::<()>(&mut self.conn)?;
+        Ok(())
+    }
+
     /// Read highest-priority job from `cluster_runs` without removing.
     /// Returns `(member, score)` where member is `"{model_name}:{job_id}"`.
     pub fn peek_job(&mut self) -> Result<Option<(String, f64)>> {

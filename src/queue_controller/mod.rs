@@ -13,6 +13,7 @@ mod synthesis_usage;
 mod cleanup;
 mod log_ctx;
 mod synthesis_monitor;
+mod health;
 
 use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -372,13 +373,18 @@ pub fn run(args: Args) -> Result<()> {
     // Drop guard cleans up any remaining state on exit (Ok or Err).
     let _guard = CleanupGuard;
 
+    // Run startup health checks before connecting to Redis or entering loop.
+    health::run_startup_checks(&args)?;
+
     let mut qc = queue::QueueClient::open(&args.redis_url)?;
     eprintln!("[DEBUG] Connected to Redis at {}", args.redis_url);
 
-    // TODO: controlla che tutto funzioni prima di iniziare il loop. Non ha senso fallire durante
-    // le sintesi.
-
     loop {
+        // ------------------------------------------------------------------
+        // Per-iteration health checks — detect infrastructure degradation.
+        // ------------------------------------------------------------------
+        health::run_loop_checks(&args, &mut qc)?;
+
         // ------------------------------------------------------------------
         // Phase 1 — Acquire job from Redis queue (Step 1-3)
         // ------------------------------------------------------------------
@@ -401,6 +407,13 @@ pub fn run(args: Args) -> Result<()> {
 
         // Set per-job debug prefix for all subsequent debug_log calls.
         log_ctx::set(&job_id_str);
+
+        // Run job preflight checks before allocating cluster resources.
+        health::run_job_preflight_checks(
+            &args.project_root,
+            &job,
+            args.git_ssh_key.as_deref(),
+        )?;
 
         // ------------------------------------------------------------------
         // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)

@@ -233,7 +233,8 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 | `log_ctx.rs` | Job-context logging: `JOB_PREFIX`, `set()`, `clear()` | ~35 |
 | `claude.rs` | Claude Code subprocess + settings management | ~160 |
 | `git_persistence.rs` | Git branch, commit, push via `git2` | ~270 |
-| `queue.rs` | Redis queue client (`QueueClient`) | ~115 |
+| `queue.rs` | Redis queue client (`QueueClient`) | ~120 |
+| `health.rs` | Startup, loop, and job preflight health checks | ~200 |
 | `slurm.rs` | Sbatch generation, polling, SSH tunnel, node resolution | ~320 |
 | `synthesis_usage.rs` | Claude Code output parsing + usage metrics | ~270 |
 | `synthesis_monitor.rs` | Slurm job recovery: polls Claude + Slurm, recreates server on expiry | ~155 |
@@ -242,6 +243,7 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 - `mod.rs` reads like an execution script — `run()` + step functions are the flow
 - `cleanup.rs` owns all resource lifecycle (isolated from orchestration)
 - `log_ctx.rs` owns the per-job debug prefix (`[job:id]`)
+- `health.rs` owns environment validation (separated from orchestration)
 - `Args` (CLI definition) lives in the binary file, not in `mod.rs`
 - All step functions call into lower modules; they never implement infrastructure
 
@@ -272,10 +274,13 @@ cluster_runs                                         -> Sorted Set (member="{mod
 {model_name}:{job_id}                                -> Hash { seed, project, prompt }
 ```
 
-**Processing phases (14 steps, 7 phases):**
+**Processing phases (14 steps + 3 health check gates, 7 phases):**
 
 | Phase | Steps | Function | What it does |
 |-------|-------|----------|-------------|
+| 0 | startup | `health::run_startup_checks` | Once before loop: cluster SSH, Slurm, models dir, llama path, claude binary, project root, SSH key |
+| 0 | per-iteration | `health::run_loop_checks` | Each iteration: Redis ping, cluster SSH, claude binary |
+| 0 | preflight | `health::run_job_preflight_checks` | After job load, before Slurm: project dir, prompt.md, git repo |
 | 1 | 1-3 | `peek_and_load_job` | ZREVRANGE peek, parse `{model}:{id}`, HGETALL metadata |
 | 2 | 4-5 | `submit_slurm_job` | Generate sbatch, `ssh sbatch` via stdin pipe |
 | 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
@@ -304,6 +309,16 @@ cluster_runs                                         -> Sorted Set (member="{mod
 5. Update `slurm_job_id` and sync to `CleanupState`
 
 On the happy path (job never expires), behavior is identical to the old blocking wait.
+
+**Health checks (`health.rs`):** Three-level validation system to fail fast before spending cluster resources:
+
+- **Startup** (`run_startup_checks`): Runs once before the controller loop. Validates cluster SSH is reachable, `sinfo` responds, models directory exists, `llama-server` is executable, `claude` binary is on PATH, project root exists, and SSH key file has safe permissions. Any failure is fatal.
+
+- **Loop** (`run_loop_checks`): Runs at the start of each loop iteration. Cheap checks: Redis PING, `ssh {host} true`, `which claude`. Catches infrastructure degradation mid-run (e.g., Redis dropped, SSH agent expired).
+
+- **Job preflight** (`run_job_preflight_checks`): Runs after loading job metadata, before submitting a Slurm job. Checks project directory exists, `prompt.md` is present (warn-only), and git repository is valid (HEAD readable, remote origin set — only if `--git-ssh-key` is provided).
+
+Failure at any level produces a `[HEALTH]` prefixed diagnostic message and terminates the controller with a clear error.
 
 ```bash
 queue_controller \
@@ -361,6 +376,8 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - Separate `log_ctx.rs` module for job-context prefix (JOB_PREFIX, set(), clear())
 - `SynthesisMonitor` in `synthesis_monitor.rs` — dedicated component for Claude Code + Slurm job monitoring during synthesis. Owns tunnel handle, polls both processes via `try_wait()`/`get_job_state()`, recovers model server on Slurm expiry via `recover()` (resubmit sbatch + re-establish tunnel + sync CleanupState). Replaces blocking `claude_child.wait()` with polling loop
 - `JobState::is_terminal()` on `slurm::JobState` — classifies terminal states (Completed, Failed, Cancelled, Timeout, NotFound) for expiry detection. `get_job_state` made `pub(crate)` for monitor access
+- `health.rs` three-level validation: `run_startup_checks` (once before loop), `run_loop_checks` (every iteration), `run_job_preflight_checks` (after job load, before Slurm). Each check is a private function with `[HEALTH]` prefixed logging, called from public orchestrator functions that bail on first failure
+- `QueueClient::ping()` — lightweight Redis connectivity check via `PING`, used by `run_loop_checks` to detect dropped connections mid-run
 - CLI Args defined in `src/bin/queue_controller.rs`, not in `mod.rs` — binary owns its interface
 - Edition 2024, musl target for static linking
 
