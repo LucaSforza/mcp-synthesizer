@@ -224,6 +224,26 @@ cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:63
 
 Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model serving, launches Claude Code with MCP integration. Processes sequentially until queue empty.
 
+**Module structure** (under `src/queue_controller/`):
+
+| File | Responsibility | Lines |
+|------|----------------|-------|
+| `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14) | ~470 |
+| `cleanup.rs` | Resource lifecycle: `CleanupState`, `CLEANUP`, `do_cleanup`, `CleanupGuard`, `cleanup_and_reset` | ~90 |
+| `log_ctx.rs` | Job-context logging: `JOB_PREFIX`, `set()`, `clear()` | ~35 |
+| `claude.rs` | Claude Code subprocess + settings management | ~160 |
+| `git_persistence.rs` | Git branch, commit, push via `git2` | ~270 |
+| `queue.rs` | Redis queue client (`QueueClient`) | ~115 |
+| `slurm.rs` | Sbatch generation, polling, SSH tunnel, node resolution | ~320 |
+| `synthesis_usage.rs` | Claude Code output parsing + usage metrics | ~270 |
+
+**Design principles:**
+- `mod.rs` reads like an execution script — `run()` + step functions are the flow
+- `cleanup.rs` owns all resource lifecycle (isolated from orchestration)
+- `log_ctx.rs` owns the per-job debug prefix (`[job:id]`)
+- `Args` (CLI definition) lives in the binary file, not in `mod.rs`
+- All step functions call into lower modules; they never implement infrastructure
+
 **Important architecture:** queue_controller runs **locally**. Model files and Slurm are on **cluster**. SSH tunnel forwards cluster compute node port to localhost so Claude Code (local) can reach the model server.
 
 **Test projects path (local):** `/home/softdream/Programming/gits/git_diff_checker/test/`
@@ -251,25 +271,28 @@ cluster_runs                                         -> Sorted Set (member="{mod
 {model_name}:{job_id}                                -> Hash { seed, project, prompt }
 ```
 
-**Processing loop:**
-1. `ZREVRANGE cluster_runs 0 0 WITHSCORES` → peek (no removal)
-2. Parse `{model}:{id}`, HGETALL job hash → validate fields
-3. Construct model path, generate sbatch (MODEL_PATH + LLAMA_PATH + SEED)
-4. `ssh cluster "sbatch"` via stdin pipe → capture job ID
-5. Poll `squeue --format %T` until RUNNING (sacct fallback for finished jobs)
-6. `squeue --format %N` → get compute node hostname → `node_name_to_ip` (last 2 digits)
-7. `ssh -L port:node_ip:port cluster -N` → SSH tunnel (auto-closed on Drop)
-8. Injects `mcpServers` into `.claude/settings.local.json` (preserves existing config)
-8b. Create synthesis branch from HEAD and checkout (`git2` + `auth-git2`, only if `--git-ssh-key` provided)
-9. `claude -p --output-format stream-json --mcp-config mcp_config.json --strict-mcp-config "prompt"` → blocking
-   - Overrides `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` env vars
-   - Captures output, saves as `{model}_{id}.json`
-10. Restore original settings.local.json from backup
-10b. Cancel Slurm job (model server no longer needed)
-11. `check_succeeded_full()` → if true, ZREM removes job from queue; if false, bail (job stays)
-12. `commit_and_push()` — stage all changes, commit, push to origin, restore original branch (only if `--git-ssh-key` provided)
+**Processing phases (14 steps, 7 phases):**
 
-**Signal handling:** Registers for SIGINT and SIGTERM via `signal-hook`. On signal: kill claude child → scancel Slurm job → restore settings → exit. Cleanup state (`CleanupState` struct in `static Mutex`) populated incrementally as steps progress.
+| Phase | Steps | Function | What it does |
+|-------|-------|----------|-------------|
+| 1 | 1-3 | `peek_and_load_job` | ZREVRANGE peek, parse `{model}:{id}`, HGETALL metadata |
+| 2 | 4-5 | `submit_slurm_job` | Generate sbatch, `ssh sbatch` via stdin pipe |
+| 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
+| 3 | 7+7b | `prepare_project_environment` | Resolve project dir, read `prompt.md` |
+| 3 | 8+8b | `setup_claude_and_git` | Inject mcpServers in settings.local.json, create git branch |
+| 4 | 9 | `run_claude_code` | Kill stale mcp_synth, spawn `claude -p` (blocking) |
+| 5 | 10+10b | `cleanup_environment` | Restore settings, `scancel` Slurm job |
+| 6 | 11 | `check_claude_result` | Verify exit status + `check_succeeded_full()` |
+| 6 | 12 | `remove_job_from_queue` | ZREM from `cluster_runs` |
+| 7 | 13 | `persist_usage_to_redis` | Parse stream-json output, write usage to test_run |
+| 7 | 14 | `push_synthesis_to_git` | Stage, commit, push, restore original branch |
+
+**Logging:** `debug_log!` macro prepends `[job:id]` to every `[DEBUG]`/`[WARN]` line inside a job context. Set via `log_ctx::set(id)` at Phase 2 start, cleared in `cleanup_and_reset`. Separator banners (`===== Job ... =====`) printed with plain `eprintln!` — no prefix, they are the visual delimiter.
+
+**Cleanup lifecycle:** `CleanupState` (in `cleanup.rs`) is populated incrementally as each step acquires a resource. Three paths drain it:
+- **Happy path**: `cleanup_environment` + `cleanup_and_reset` at end of loop iteration
+- **Signal**: SIGINT/SIGTERM → dedicated thread → `do_cleanup` → exit
+- **Unwind**: `CleanupGuard::drop` → `do_cleanup`
 
 ```bash
 queue_controller \
@@ -318,11 +341,14 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `Box<dyn Database>` trait objects in `Mutex` for rmcp compatibility
 - `::redis::Commands` / `::redis::RedisError` qualified paths (edition 2024 module name collision with `db::redis` submodule)
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
-- `eprintln!` debug logging with `[DEBUG]` prefix throughout
+- `debug_log!` macro for job-context debug logging (`[job:id]` prefix on every `[DEBUG]`/`[WARN]` line during a job)
 - `signal-hook::iterator::Signals` for SIGINT/SIGTERM handling in a dedicated thread (self-pipe mechanism)
 - `auth-git2::GitAuthenticator` for deterministic SSH key authentication (no ssh-agent)
 - Two-phase Git API: `checkout_synthesis_branch()` before Claude Code, `commit_and_push()` after success
 - `static Mutex<Option<CleanupState>>` for graceful shutdown state shared between main loop and signal handler
+- Separate `cleanup.rs` module for all resource lifecycle management (CleanupState, CLEANUP, do_cleanup, CleanupGuard, cleanup_and_reset)
+- Separate `log_ctx.rs` module for job-context prefix (JOB_PREFIX, set(), clear())
+- CLI Args defined in `src/bin/queue_controller.rs`, not in `mod.rs` — binary owns its interface
 - Edition 2024, musl target for static linking
 
 ## Dependencies
