@@ -228,7 +228,7 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 
 | File | Responsibility | Lines |
 |------|----------------|-------|
-| `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14) | ~470 |
+| `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14) | ~480 |
 | `cleanup.rs` | Resource lifecycle: `CleanupState`, `CLEANUP`, `do_cleanup`, `CleanupGuard`, `cleanup_and_reset` | ~90 |
 | `log_ctx.rs` | Job-context logging: `JOB_PREFIX`, `set()`, `clear()` | ~35 |
 | `claude.rs` | Claude Code subprocess + settings management | ~160 |
@@ -236,6 +236,7 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 | `queue.rs` | Redis queue client (`QueueClient`) | ~115 |
 | `slurm.rs` | Sbatch generation, polling, SSH tunnel, node resolution | ~320 |
 | `synthesis_usage.rs` | Claude Code output parsing + usage metrics | ~270 |
+| `synthesis_monitor.rs` | Slurm job recovery: polls Claude + Slurm, recreates server on expiry | ~155 |
 
 **Design principles:**
 - `mod.rs` reads like an execution script — `run()` + step functions are the flow
@@ -280,7 +281,7 @@ cluster_runs                                         -> Sorted Set (member="{mod
 | 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
 | 3 | 7+7b | `prepare_project_environment` | Resolve project dir, read `prompt.md` |
 | 3 | 8+8b | `setup_claude_and_git` | Inject mcpServers in settings.local.json, create git branch |
-| 4 | 9 | `run_claude_code` | Kill stale mcp_synth, spawn `claude -p` (blocking) |
+| 4 | 9 | `run_claude_code` + `SynthesisMonitor` | Kill stale mcp_synth, spawn `claude -p` → monitor loop polls Claude exit + Slurm health, recovers model server on expiry |
 | 5 | 10+10b | `cleanup_environment` | Restore settings, `scancel` Slurm job |
 | 6 | 11 | `check_claude_result` | Verify exit status + `check_succeeded_full()` |
 | 6 | 12 | `remove_job_from_queue` | ZREM from `cluster_runs` |
@@ -293,6 +294,16 @@ cluster_runs                                         -> Sorted Set (member="{mod
 - **Happy path**: `cleanup_environment` + `cleanup_and_reset` at end of loop iteration
 - **Signal**: SIGINT/SIGTERM → dedicated thread → `do_cleanup` → exit
 - **Unwind**: `CleanupGuard::drop` → `do_cleanup`
+
+**Model server recovery (`synthesis_monitor.rs`):** Phase 4 replaces blocking `claude_child.wait()` with `SynthesisMonitor::wait_for_completion()`. The monitor polls both Claude exit status (`try_wait`) and Slurm job state (`get_job_state`) every `poll_interval` seconds. If the Slurm job enters a terminal state (Completed, Failed, Cancelled, Timeout, NotFound), `recover()` resubmits the model-serving job and re-establishes the SSH tunnel:
+
+1. Submit new sbatch with same parameters (model path, llama path, seed)
+2. Wait for RUNNING (`poll_job`)
+3. Resolve compute node IP
+4. Establish new SSH tunnel (`TunnelHandle` replaces old one — `Drop` closes old tunnel)
+5. Update `slurm_job_id` and sync to `CleanupState`
+
+On the happy path (job never expires), behavior is identical to the old blocking wait.
 
 ```bash
 queue_controller \
@@ -341,13 +352,15 @@ Validation upfront: model/project non-empty, prompt file exists and non-empty, i
 - `Box<dyn Database>` trait objects in `Mutex` for rmcp compatibility
 - `::redis::Commands` / `::redis::RedisError` qualified paths (edition 2024 module name collision with `db::redis` submodule)
 - `anyhow::Result` for main; `Result<String, String>` for MCP tool convention
-- `debug_log!` macro for job-context debug logging (`[job:id]` prefix on every `[DEBUG]`/`[WARN]` line during a job)
+- `debug_log!` macro for job-context debug logging (`[job:id]` prefix on every `[DEBUG]`/`[WARN]` line during a job). Defined in `mod.rs`, re-exported via `pub(crate) use debug_log;` for child module access. Call sites must have `JOB_PREFIX` in scope (macro hygiene — bare identifiers resolve at call site)
 - `signal-hook::iterator::Signals` for SIGINT/SIGTERM handling in a dedicated thread (self-pipe mechanism)
 - `auth-git2::GitAuthenticator` for deterministic SSH key authentication (no ssh-agent)
 - Two-phase Git API: `checkout_synthesis_branch()` before Claude Code, `commit_and_push()` after success
 - `static Mutex<Option<CleanupState>>` for graceful shutdown state shared between main loop and signal handler
 - Separate `cleanup.rs` module for all resource lifecycle management (CleanupState, CLEANUP, do_cleanup, CleanupGuard, cleanup_and_reset)
 - Separate `log_ctx.rs` module for job-context prefix (JOB_PREFIX, set(), clear())
+- `SynthesisMonitor` in `synthesis_monitor.rs` — dedicated component for Claude Code + Slurm job monitoring during synthesis. Owns tunnel handle, polls both processes via `try_wait()`/`get_job_state()`, recovers model server on Slurm expiry via `recover()` (resubmit sbatch + re-establish tunnel + sync CleanupState). Replaces blocking `claude_child.wait()` with polling loop
+- `JobState::is_terminal()` on `slurm::JobState` — classifies terminal states (Completed, Failed, Cancelled, Timeout, NotFound) for expiry detection. `get_job_state` made `pub(crate)` for monitor access
 - CLI Args defined in `src/bin/queue_controller.rs`, not in `mod.rs` — binary owns its interface
 - Edition 2024, musl target for static linking
 

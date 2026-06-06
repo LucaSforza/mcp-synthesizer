@@ -12,6 +12,7 @@ mod synthesis_usage;
 
 mod cleanup;
 mod log_ctx;
+mod synthesis_monitor;
 
 use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGINT, SIGTERM};
@@ -35,6 +36,7 @@ macro_rules! debug_log {
         eprintln!($($arg)*);
     }};
 }
+pub(crate) use debug_log;
 
 // ---------------------------------------------------------------------------
 // Loop step functions (in execution order)
@@ -410,7 +412,7 @@ pub fn run(args: Args) -> Result<()> {
         )?;
         with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
 
-        let _tunnel = wait_and_create_tunnel(
+        let tunnel = wait_and_create_tunnel(
             &args.cluster_host,
             &slurm_job_id,
             args.poll_interval,
@@ -447,14 +449,19 @@ pub fn run(args: Args) -> Result<()> {
         let child_pid = claude_child.id();
         with_cleanup(|s| s.claude_child_pid = Some(child_pid));
 
-        let claude_status = claude_child
-            .wait()
-            // TODO: Invece di mettere un wait, bisogna far
-            // entrare il controller in un pooling. Da un lato
-            // nel pooling controlliamo se il job claude sia
-            // finito, e poi controlliamo che nel cluster vada
-            // tutto bene. Gestire poi i diversi casi.
-            .context("failed to wait for Claude Code")?;
+        let mut monitor = synthesis_monitor::SynthesisMonitor::new(
+            slurm_job_id.clone(),
+            tunnel,
+            &args.models_path,
+            &model_name,
+            &args.llama_path,
+            &job.seed,
+            &args.cluster_host,
+            args.tunnel_port,
+            args.poll_interval,
+            args.poll_timeout,
+        );
+        let claude_status = monitor.wait_for_completion(&mut claude_child)?;
         with_cleanup(|s| s.claude_child_pid = None);
 
         // ------------------------------------------------------------------

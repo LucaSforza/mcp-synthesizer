@@ -38,6 +38,20 @@ impl FromStr for JobState {
     }
 }
 
+impl JobState {
+    /// True for terminal states that require model-server recovery.
+    pub(crate) fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            JobState::Completed
+                | JobState::Failed
+                | JobState::Cancelled
+                | JobState::Timeout
+                | JobState::NotFound,
+        )
+    }
+}
+
 impl fmt::Display for JobState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -199,10 +213,8 @@ pub fn poll_job(
     bail!("job {job_id} did not reach RUNNING state within {timeout_secs}s");
 }
 
-// TODO: create pooling that check for claude code execution and cluster execution
-
 /// Get single job state via squeue.
-fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
+pub(crate) fn get_job_state(cluster_host: &str, job_id: &str) -> Result<JobState> {
     let output = Command::new("ssh")
         .args([
             cluster_host,
