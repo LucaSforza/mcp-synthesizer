@@ -1,6 +1,6 @@
 //! Sbatch generation and Slurm interaction via SSH.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;

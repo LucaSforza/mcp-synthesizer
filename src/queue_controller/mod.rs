@@ -10,38 +10,22 @@ mod queue;
 mod slurm;
 mod synthesis_usage;
 
+mod cleanup;
+mod log_ctx;
+
 use anyhow::{Context, Result, bail};
-use clap::Parser;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Mutex;
 
-// ---------------------------------------------------------------------------
-// Graceful shutdown state
-// ---------------------------------------------------------------------------
+use self::cleanup::{
+    CLEANUP, CleanupGuard, CleanupState, cleanup_and_reset, do_cleanup, take_slurm_job_id,
+    with_cleanup,
+};
+use self::log_ctx::JOB_PREFIX;
+use crate::Args;
 
-struct CleanupState {
-    slurm_job_id: Option<String>,
-    cluster_host: String,
-    project_dir: Option<PathBuf>,
-    settings_backup: Option<PathBuf>,
-    claude_child_pid: Option<u32>,
-    orig_branch: Option<(PathBuf, String)>, // (project_dir, branch_name) to restore on failure
-}
-
-static CLEANUP: Mutex<Option<CleanupState>> = Mutex::new(None);
-
-// ---------------------------------------------------------------------------
-// Per-job debug prefix
-// ---------------------------------------------------------------------------
-
-/// Set by the main loop to tag every debug line with the current job.
-/// Format: `[job:model_name:job_id]`.
-static JOB_PREFIX: Mutex<String> = Mutex::new(String::new());
-
-/// Like `eprintln!` but prepends `[job:model:id]` from `JOB_PREFIX` if set.
+/// Like `eprintln!` but prepends `[job:id]` from [`JOB_PREFIX`] if set.
 macro_rules! debug_log {
     ($($arg:tt)*) => {{
         let _guard = JOB_PREFIX.lock().unwrap();
@@ -50,121 +34,6 @@ macro_rules! debug_log {
         }
         eprintln!($($arg)*);
     }};
-}
-
-// ---------------------------------------------------------------------------
-// Cleanup helpers
-// ---------------------------------------------------------------------------
-
-fn with_cleanup<F>(f: F)
-where
-    F: FnOnce(&mut CleanupState),
-{
-    if let Ok(mut guard) = CLEANUP.lock()
-        && let Some(ref mut state) = *guard
-    {
-        f(state);
-    }
-}
-
-fn do_cleanup(state: &CleanupState) {
-    if let Some(pid) = state.claude_child_pid {
-        let _ = Command::new("kill").args(["--", &pid.to_string()]).status();
-        eprintln!("[CLEANUP] Killed claude child {pid}");
-    }
-
-    if let Some(ref job_id) = state.slurm_job_id {
-        slurm::cancel_job(&state.cluster_host, job_id);
-    }
-
-    if let Some(ref project_dir) = state.project_dir {
-        let _ = claude::restore_claude_settings(project_dir, state.settings_backup.clone());
-        eprintln!("[CLEANUP] Restored claude settings");
-    }
-
-    if let Some((ref project_dir, ref branch_name)) = state.orig_branch
-        && let Ok(repo) = git2::Repository::open(project_dir)
-    {
-        let _ = repo.set_head(&format!("refs/heads/{}", branch_name));
-        let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
-        eprintln!("[CLEANUP] Restored git branch '{branch_name}'");
-    }
-}
-
-/// Drop guard: runs cleanup on any remaining state when `run()` exits.
-struct CleanupGuard;
-
-/// Run pending cleanup actions, reset per-iteration state, and clear job prefix
-/// so the next loop iteration starts with clean state.
-fn cleanup_and_reset(state: &mut CleanupState) {
-    do_cleanup(state);
-    state.slurm_job_id = None;
-    state.project_dir = None;
-    state.settings_backup = None;
-    state.claude_child_pid = None;
-    state.orig_branch = None;
-    *JOB_PREFIX.lock().unwrap() = String::new();
-}
-
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        if let Ok(guard) = CLEANUP.lock()
-            && let Some(ref state) = *guard
-        {
-            do_cleanup(state);
-        }
-        eprintln!("[CLEANUP] Graceful shutdown complete");
-    }
-}
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-
-#[derive(Parser)]
-#[command(name = "queue_controller")]
-pub struct Args {
-    /// Base directory containing GGUF model files.
-    #[arg(long)]
-    pub models_path: PathBuf,
-
-    /// Base directory containing synthesis project directories.
-    #[arg(long)]
-    pub project_root: PathBuf,
-
-    /// Redis server URL.
-    #[arg(long, default_value = "redis://localhost:6379")]
-    pub redis_url: String,
-
-    /// Model server URL (OpenAI-compatible API endpoint on the cluster).
-    #[arg(long, default_value = "http://127.0.0.1:8080/v1")]
-    pub model_url: String,
-
-    /// SSH hostname for the Slurm cluster.
-    #[arg(long, default_value = "cluster")]
-    pub cluster_host: String,
-
-    /// Polling interval in seconds for Slurm job status.
-    #[arg(long, default_value_t = 30)]
-    pub poll_interval: u64,
-
-    /// Max wait time in seconds for Slurm job to reach RUNNING state.
-    #[arg(long, default_value_t = 1800)]
-    pub poll_timeout: u64,
-
-    /// Port for SSH tunnel to reach the model server on the cluster.
-    #[arg(long, default_value_t = 8080)]
-    pub tunnel_port: u16,
-
-    /// Path to llama-server executable on the cluster.
-    // TODO: remove hardcoded default — make configurable through Redis job metadata.
-    #[arg(long, default_value = "/home/sforza_2050030/.local/bin/llama-server")]
-    pub llama_path: String,
-
-    /// Path to SSH private key for Git push authentication.
-    /// If omitted, Git persistence is skipped.
-    #[arg(long)]
-    pub git_ssh_key: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -370,11 +239,7 @@ fn cleanup_environment(
     });
 
     // Step 10b: cancel Slurm job — model server no longer needed.
-    let slurm_job_id = CLEANUP
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.as_mut().and_then(|s| s.slurm_job_id.take()));
-    if let Some(ref job_id) = slurm_job_id {
+    if let Some(ref job_id) = take_slurm_job_id() {
         slurm::cancel_job(cluster_host, job_id);
     } else {
         debug_log!("[WARN] no slurm job id to cancel");
@@ -477,9 +342,7 @@ fn push_synthesis_to_git(
 // ---------------------------------------------------------------------------
 
 /// Run the queue controller.  Called from binary entrypoint.
-pub fn run() -> Result<()> {
-    let args = Args::parse();
-
+pub fn run(args: Args) -> Result<()> {
     // Register signal handler for graceful shutdown.
     *CLEANUP.lock().unwrap() = Some(CleanupState {
         slurm_job_id: None,
@@ -526,7 +389,7 @@ pub fn run() -> Result<()> {
         let iteration = job_id as u64;
 
         // Set per-job debug prefix for all subsequent debug_log calls.
-        *JOB_PREFIX.lock().unwrap() = format!("[job:{}]", job_id_str);
+        log_ctx::set(&job_id_str);
 
         // ------------------------------------------------------------------
         // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
