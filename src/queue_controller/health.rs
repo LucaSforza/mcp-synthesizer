@@ -171,15 +171,12 @@ fn check_git_repository(project_dir: &Path) -> Result<()> {
 
 /// Run once before entering the main controller loop.
 ///
-/// Validates all infrastructure the controller depends on. Any failure is
-/// fatal — the controller exits before allocating any resources.
+/// Validates generic infrastructure. Any failure is fatal — the controller
+/// exits before allocating any resources.
+/// Cluster-specific checks run later when a cluster-mode job is loaded.
 pub fn run_startup_checks(args: &Args) -> Result<()> {
     eprintln!("[HEALTH] ===== Startup checks =====");
 
-    check_cluster_ssh(&args.cluster_host)?;
-    check_slurm_available(&args.cluster_host)?;
-    check_models_directory(&args.cluster_host, &args.models_path)?;
-    check_cluster_llama_path(&args.cluster_host, &args.llama_path)?;
     check_claude_binary()?;
     check_project_root(&args.project_root)?;
     check_ssh_key_file(args.git_ssh_key.as_ref())?;
@@ -188,13 +185,26 @@ pub fn run_startup_checks(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// Run before processing a cluster-mode job. Validates cluster infrastructure.
+pub fn run_cluster_startup_checks(args: &Args) -> Result<()> {
+    eprintln!("[HEALTH] ===== Cluster startup checks =====");
+
+    check_cluster_ssh(&args.cluster_host)?;
+    check_slurm_available(&args.cluster_host)?;
+    check_models_directory(&args.cluster_host, &args.models_path)?;
+    check_cluster_llama_path(&args.cluster_host, &args.llama_path)?;
+
+    eprintln!("[HEALTH] ===== All cluster startup checks passed =====\n");
+    Ok(())
+}
+
 /// Run before each job iteration.
 ///
-/// Fast checks to detect infrastructure degradation while the controller
-/// is running. Any failure is fatal.
-pub fn run_loop_checks(args: &Args, qc: &mut queue::QueueClient) -> Result<()> {
+/// Fast generic checks to detect infrastructure degradation while the controller
+/// is running. Cluster-specific checks are run separately when processing a
+/// cluster-mode job.
+pub fn run_loop_checks(_args: &Args, qc: &mut queue::QueueClient) -> Result<()> {
     qc.ping().context("Redis ping failed — connection may be lost")?;
-    check_cluster_ssh(&args.cluster_host)?;
     check_claude_binary()?;
 
     Ok(())

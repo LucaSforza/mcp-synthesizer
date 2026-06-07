@@ -19,6 +19,8 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::path::{Path, PathBuf};
 
+use self::queue::ExecutionMode;
+
 use self::cleanup::{
     CLEANUP, CleanupGuard, CleanupState, cleanup_and_reset, do_cleanup, take_slurm_job_id,
     with_cleanup,
@@ -150,8 +152,7 @@ fn prepare_project_environment(
 /// `(orig_branch, branch_name)`.
 fn setup_claude_and_git(
     project_dir: &Path,
-    model_url: &str,
-    model_name: &str,
+    endpoint: &claude::ModelEndpoint,
     project_name: &str,
     git_ssh_key: Option<&PathBuf>,
     seed: u64,
@@ -164,8 +165,8 @@ fn setup_claude_and_git(
     let project_dir_str = project_dir.to_string_lossy().to_string();
     let backup = claude::setup_claude_settings(
         project_dir,
-        model_url,
-        model_name,
+        &endpoint.url,
+        &endpoint.model_name,
         &project_dir_str,
         project_name,
     )?;
@@ -180,7 +181,7 @@ fn setup_claude_and_git(
         let git = git_persistence::GitPersistence::new(project_dir, &auth_config)
             .context("git persistence setup failed")?;
         let (orig_branch, branch_name) = git
-            .checkout_synthesis_branch(model_name, iteration, seed)
+            .checkout_synthesis_branch(&endpoint.model_name, iteration, seed)
             .context("failed to prepare git branch for synthesis")?;
         with_cleanup(|s| {
             s.orig_branch = Some((project_dir.to_path_buf(), orig_branch.clone()));
@@ -199,23 +200,24 @@ fn run_claude_code(
     project_dir: &Path,
     prompt: &str,
     system_prompt: &str,
-    model_name: &str,
+    endpoint: &claude::ModelEndpoint,
     job_id_str: &str,
 ) -> Result<(std::process::Child, PathBuf)> {
     eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
     eprintln!("[DEBUG] Launching Claude Code...");
-    let output_path = project_dir.join(format!("{}_{}.jsonl", model_name, job_id_str));
-    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, model_name)?;
+    let output_path = project_dir.join(format!("{}_{}.jsonl", endpoint.model_name, job_id_str));
+    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, endpoint)?;
     Ok((child, output_path))
 }
 
 /// Step 10 + 10b: Restore original `.claude/settings.local.json` from
-/// backup and cancel the Slurm model-serving job.
+/// backup and cancel Slurm job (cluster mode only).
 fn cleanup_environment(
     project_dir: &Path,
     backup: Option<PathBuf>,
     cluster_host: &str,
+    execution_mode: &ExecutionMode,
 ) -> Result<()> {
     eprintln!(
         "[DEBUG] [Step 10+10b] cleanup_environment — restore claude settings, cancel Slurm job"
@@ -228,10 +230,16 @@ fn cleanup_environment(
     });
 
     // Step 10b: cancel Slurm job — model server no longer needed.
-    if let Some(ref job_id) = take_slurm_job_id() {
-        slurm::cancel_job(cluster_host, job_id);
-    } else {
-        eprintln!("[WARN] no slurm job id to cancel");
+    // API mode has no Slurm job; nothing to cancel.
+    match execution_mode {
+        ExecutionMode::Cluster => {
+            if let Some(ref job_id) = take_slurm_job_id() {
+                slurm::cancel_job(cluster_host, job_id);
+            } else {
+                eprintln!("[WARN] no slurm job id to cancel");
+            }
+        }
+        ExecutionMode::Api => {}
     }
 
     Ok(())
@@ -401,28 +409,84 @@ pub fn run(args: Args) -> Result<()> {
         )?;
 
         // ------------------------------------------------------------------
-        // Phase 2 — Submit Slurm job and establish SSH tunnel (Step 4-6)
+        // Phase 2 — Acquire model endpoint (Step 4-6)
         // ------------------------------------------------------------------
+        // Cluster: submit Slurm job, create SSH tunnel, wait for server.
+        // API: use external endpoint directly.
 
-        let slurm_job_id = submit_slurm_job(
-            &args.cluster_host,
-            &args.models_path,
-            &model_name,
-            &args.llama_path,
-            &job.seed,
-        )?;
-        with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
+        let endpoint = match job.execution_mode {
+            ExecutionMode::Cluster => {
+                // Run cluster-specific health checks before allocating resources.
+                health::run_cluster_startup_checks(&args)?;
 
-        let tunnel = wait_and_create_tunnel(
-            &args.cluster_host,
-            &slurm_job_id,
-            args.poll_interval,
-            args.poll_timeout,
-            args.tunnel_port,
-        )?;
+                let slurm_job_id = submit_slurm_job(
+                    &args.cluster_host,
+                    &args.models_path,
+                    &model_name,
+                    &args.llama_path,
+                    &job.seed,
+                )?;
+                with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
 
-        // Wait for model server to be ready before allocating local resources.
-        health::wait_for_model_endpoint(&args.model_url, args.poll_interval, args.poll_timeout)?;
+                let tunnel = wait_and_create_tunnel(
+                    &args.cluster_host,
+                    &slurm_job_id,
+                    args.poll_interval,
+                    args.poll_timeout,
+                    args.tunnel_port,
+                )?;
+
+                // Wait for model server to be ready.
+                health::wait_for_model_endpoint(
+                    &args.model_url,
+                    args.poll_interval,
+                    args.poll_timeout,
+                )?;
+
+                // Store tunnel handle in cleanup state for signal handler.
+                // (TunnelHandle owns the SSH child; we need it alive for the monitor.)
+                // The monitor takes ownership of both slurm_job_id and tunnel.
+                let monitor = synthesis_monitor::SynthesisMonitor::new(
+                    slurm_job_id.clone(),
+                    tunnel,
+                    &args.models_path,
+                    &model_name,
+                    &args.llama_path,
+                    &job.seed,
+                    &args.cluster_host,
+                    args.tunnel_port,
+                    args.poll_interval,
+                    args.poll_timeout,
+                );
+
+                // We carry the monitor as an Option — used in Phase 4 for cluster mode.
+                // Injected into the match so the tunnel handle stays alive.
+                Some(monitor)
+            }
+            ExecutionMode::Api => {
+                let api_url = job
+                    .api_url
+                    .as_ref()
+                    .context("api_url required for Api execution mode")?;
+                eprintln!("[DEBUG] Using external API endpoint: {api_url}");
+                None
+            }
+        };
+
+        // Resolve ModelEndpoint from execution mode.
+        let endpoint_url = match &job.execution_mode {
+            ExecutionMode::Cluster => format!("http://127.0.0.1:{}", args.tunnel_port),
+            ExecutionMode::Api => job
+                .api_url
+                .as_ref()
+                .expect("api_url required")
+                .trim_end_matches("/v1")
+                .to_string(),
+        };
+        let model_endpoint = claude::ModelEndpoint {
+            url: endpoint_url,
+            model_name: job.model_name.clone(),
+        };
 
         // ------------------------------------------------------------------
         // Phase 3 — Prepare local environment (Step 7+7b, Step 8+8b)
@@ -432,8 +496,7 @@ pub fn run(args: Args) -> Result<()> {
 
         let (backup, synthesis_branch) = setup_claude_and_git(
             &project_dir,
-            &args.model_url,
-            &model_name,
+            &model_endpoint,
             &job.project,
             args.git_ssh_key.as_ref(),
             seed,
@@ -447,31 +510,37 @@ pub fn run(args: Args) -> Result<()> {
             &project_dir,
             &job.prompt,
             &system_prompt,
-            &model_name,
+            &model_endpoint,
             &job_id_str,
         )?;
         let child_pid = claude_child.id();
         with_cleanup(|s| s.claude_child_pid = Some(child_pid));
 
-        let mut monitor = synthesis_monitor::SynthesisMonitor::new(
-            slurm_job_id.clone(),
-            tunnel,
-            &args.models_path,
-            &model_name,
-            &args.llama_path,
-            &job.seed,
-            &args.cluster_host,
-            args.tunnel_port,
-            args.poll_interval,
-            args.poll_timeout,
-        );
-        let claude_status = monitor.wait_for_completion(&mut claude_child)?;
+        let claude_status = match job.execution_mode {
+            ExecutionMode::Cluster => {
+                // Extract monitor — unwrap is safe because we created it above.
+                let mut monitor = endpoint.expect("monitor required for cluster mode");
+                monitor.wait_for_completion(&mut claude_child)?
+            }
+            ExecutionMode::Api => {
+                // No Slurm job to monitor — just wait for Claude to finish.
+                eprintln!("[DEBUG] API mode: waiting for Claude Code to finish (no Slurm monitor)");
+                claude_child
+                    .wait()
+                    .context("Claude Code process error")?
+            }
+        };
         with_cleanup(|s| s.claude_child_pid = None);
 
         // ------------------------------------------------------------------
         // Phase 5 — Tear down environment (Step 10+10b)
         // ------------------------------------------------------------------
-        cleanup_environment(&project_dir, backup, &args.cluster_host)?;
+        cleanup_environment(
+            &project_dir,
+            backup,
+            &args.cluster_host,
+            &job.execution_mode,
+        )?;
 
         // ------------------------------------------------------------------
         // Phase 6 — Evaluate result (Step 11-12)

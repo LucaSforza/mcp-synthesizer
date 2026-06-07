@@ -7,6 +7,13 @@ use anyhow::{Context, Result, bail};
 use redis::Commands;
 use std::collections::HashMap;
 
+/// Execution mode for a synthesis job: cluster (Slurm + tunnel) or API.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExecutionMode {
+    Cluster,
+    Api,
+}
+
 /// Metadata for a synthesis job loaded from Redis.
 #[derive(Debug)]
 pub struct JobMetadata {
@@ -14,6 +21,8 @@ pub struct JobMetadata {
     pub seed: String,
     pub project: String,
     pub prompt: String,
+    pub execution_mode: ExecutionMode,
+    pub api_url: Option<String>,
 }
 
 /// Thin wrapper around Redis connection for queue operations.
@@ -101,8 +110,12 @@ impl QueueClient {
 
     /// Load job metadata from Redis hash `{model_name}:{job_id}`.
     /// Validates all required fields exist.
-    pub fn load_job(&mut self, model_name: &str, job_id: i64) -> Result<JobMetadata> {
-        let key = format!("{model_name}:{job_id}");
+    ///
+    /// `model_name_param` is parsed from the queue key (`{model}:{job_id}`).
+    /// For cluster mode this IS the model name. For API mode the actual model
+    /// name is read from the hash `model` field.
+    pub fn load_job(&mut self, model_name_param: &str, job_id: i64) -> Result<JobMetadata> {
+        let key = format!("{model_name_param}:{job_id}");
         let fields: HashMap<String, String> = self.conn.hgetall(&key)?;
         if fields.is_empty() {
             bail!("job metadata not found for key '{key}'");
@@ -119,11 +132,29 @@ impl QueueClient {
             .get("prompt")
             .cloned()
             .context("missing 'prompt' field in job metadata")?;
+
+        let execution_mode = match fields.get("execution_mode").map(|s| s.as_str()) {
+            Some("api") => ExecutionMode::Api,
+            _ => ExecutionMode::Cluster,
+        };
+
+        let api_url = fields.get("api_url").cloned();
+
+        let model_name = match execution_mode {
+            ExecutionMode::Cluster => model_name_param.to_string(),
+            ExecutionMode::Api => fields
+                .get("model")
+                .cloned()
+                .context("missing 'model' field for API job")?,
+        };
+
         Ok(JobMetadata {
-            model_name: model_name.to_string(),
+            model_name,
             seed,
             project,
             prompt,
+            execution_mode,
+            api_url,
         })
     }
 }

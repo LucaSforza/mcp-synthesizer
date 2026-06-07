@@ -1,8 +1,21 @@
-//! Claude Code launch and MCP settings management.
+//! Claude Code launch, MCP settings management, and model endpoint abstraction.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// An OpenAI-compatible model endpoint for Claude Code to use.
+///
+/// Created from either:
+/// - **Cluster mode**: tunnel to localhost (e.g., `http://127.0.0.1:8080`)
+/// - **API mode**: external URL from job metadata (e.g., `https://api.openai.com/v1`)
+///
+/// The `url` is the base for `ANTHROPIC_BASE_URL` (without `/v1` suffix).
+#[derive(Debug, Clone)]
+pub struct ModelEndpoint {
+    pub url: String,
+    pub model_name: String,
+}
 
 /// Resolve project directory from root + project name.
 pub fn resolve_project_dir(project_root: &Path, project_name: &str) -> PathBuf {
@@ -112,12 +125,13 @@ pub fn kill_existing_mcp_synth() {
 /// Spawn Claude Code process with prompt in project directory.
 /// Returns the Child handle so caller can store PID for signal handling and wait.
 /// `system_prompt` is passed via `--append-system-prompt` (project's prompt.md).
+/// `endpoint` provides `ANTHROPIC_BASE_URL` and `ANTHROPIC_MODEL` dynamically.
 pub fn spawn_claude(
     project_dir: &Path,
     prompt: &str,
     system_prompt: &str,
     output_path: &Path,
-    model_name: &str,
+    endpoint: &ModelEndpoint,
 ) -> Result<std::process::Child> {
     let file = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create output file {output_path:?}"))?;
@@ -141,12 +155,17 @@ pub fn spawn_claude(
     }
     args.push(prompt);
 
+    eprintln!(
+        "[DEBUG] ANTHROPIC_BASE_URL={} ANTHROPIC_MODEL={}",
+        endpoint.url, endpoint.model_name,
+    );
+
     let child = Command::new("claude")
         .args(&args)
         .current_dir(project_dir)
         .env("CAVEMAN_DEFAULT_MODE", "wenyan")
-        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:8080")
-        .env("ANTHROPIC_MODEL", model_name)
+        .env("ANTHROPIC_BASE_URL", &endpoint.url)
+        .env("ANTHROPIC_MODEL", &endpoint.model_name)
         .stdin(Stdio::inherit())
         .stdout(Stdio::from(file))
         .stderr(Stdio::inherit())
