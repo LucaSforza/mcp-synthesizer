@@ -45,3 +45,7 @@ path = "src/bin/queue_controller.rs"
 [[bin]]
 name = "populate_queue"
 path = "src/bin/populate_queue.rs"
+
+[[bin]]
+name = "stats_export"
+path = "src/bin/stats_export.rs"
