@@ -1,6 +1,6 @@
 //! Sbatch generation and Slurm interaction via SSH.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
@@ -103,7 +103,7 @@ pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str) -> Strin
     --models-max 1 \
     -t 8 \
     -ngl 99 \
-    -c 256000 \
+    -c 100000 \
     --host 0.0.0.0 \
     --cache-reuse 256 \
     --temp 0.6 \

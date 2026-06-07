@@ -188,6 +188,7 @@ pub fn spawn_claude(
         .env("CAVEMAN_DEFAULT_MODE", "wenyan")
         .env("ANTHROPIC_BASE_URL", &endpoint.url)
         .env("ANTHROPIC_MODEL", &endpoint.model_name)
+        .env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "100000")
         .stdin(Stdio::inherit())
         .stdout(Stdio::from(file))
         .stderr(Stdio::inherit())

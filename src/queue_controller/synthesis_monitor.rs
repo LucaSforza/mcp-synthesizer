@@ -126,14 +126,15 @@ impl SynthesisMonitor {
         let node_name = slurm::get_job_node(&self.cluster_host, &new_job_id)?;
         let node_ip = slurm::node_name_to_ip(&node_name);
         let new_tunnel = slurm::establish_tunnel(&self.cluster_host, &node_ip, self.tunnel_port)?;
+
+        // Replace tunnel: the old handle drops here, closing the old SSH tunnel.
+        // The log from the old handle's Drop appears before this message.
+        self.tunnel = new_tunnel;
+        self.slurm_job_id = new_job_id;
         eprintln!(
             "[RECOVERY] New SSH tunnel established to {node_ip}:{}",
             self.tunnel_port,
         );
-
-        // Replace tunnel (drops old handle, closing old SSH tunnel).
-        self.tunnel = new_tunnel;
-        self.slurm_job_id = new_job_id;
 
         // Sync cleanup state so signal/guard cancels the right job.
         with_cleanup(|s| s.slurm_job_id = Some(self.slurm_job_id.clone()));
