@@ -64,7 +64,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 `--db-type` (default `redis`), `--redis-url` (default `redis://localhost:6379`),
 `--db-path` (used with `--db-type sqlite`)
 
-**Package:** `mcp_synth` (Cargo.toml name). Four binaries:
+**Package:** `mcp_synth` (Cargo.toml name). Five binaries:
 
 | Binary | Path | Purpose |
 |--------|------|---------|
@@ -72,6 +72,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 | `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |
 | `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
 | `populate_queue` | `src/bin/populate_queue.rs` | Batch enqueue synthesis jobs into Redis |
+| `stats_export` | `src/bin/stats_export.rs` | Statistical analysis of synthesis experiments |
 
 **MCP Inspector:** `npx @modelcontextprotocol/inspector --transport stdio -- cargo run -- --cwd /tmp --project test`
 
@@ -353,6 +354,63 @@ populate_queue \
 **Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash (seed, project, prompt) → ZADD `cluster_runs` with priority = iteration index. Model name is in the key, not duplicated in hash.
 
 Validation upfront: model/project non-empty, prompt file exists and non-empty, iterations > 0.
+
+### `src/bin/stats_export.rs` — Synthesis experiment analysis
+
+Exports synthesis trial data from Redis and computes statistics per experiment group. Outputs a canonical `analysis.json` dataset consumed by the Python visualization layer.
+
+```bash
+cargo run --bin stats_export -- \
+  --redis-url redis://localhost:6379 \
+  --range experiment_a=37:46 \
+  --output results/
+```
+
+Multiple groups for comparison:
+```bash
+cargo run --bin stats_export -- \
+  --range group_a=37:41 \
+  --range group_b=42:46 \
+  --output results/
+```
+
+**Outputs:** `analysis.json`, `summary.json`, `summary.csv`, `report.md`
+
+**Module structure** (`src/stats/`):
+
+| File | Responsibility |
+|------|----------------|
+| `types.rs` | `GasObservation`, `ExperimentGroup`, `GroupStatistics`, `Outlier` |
+| `parser.rs` | Range parser (`label=start:end`) |
+| `loader.rs` | `RedisLoader` — read-only extraction from Redis |
+| `statistics.rs` | Statistical functions: mean, median, variance, std_dev, quartiles, IQR, CV, outlier detection |
+| `report.rs` | JSON/CSV/Markdown report generation + `analysis.json` |
+| `statistics_test.rs` | 18 tests for statistical computations |
+| `parser_test.rs` | 11 tests for range parsing |
+
+### `scripts/visualize_synthesis.py` — Python visualization
+
+Reads `analysis.json` and generates publication-quality plots. Uses **uv** for dependency management (PEP 723 inline metadata).
+
+```bash
+# Direct execution (uv auto-installs deps):
+./scripts/visualize_synthesis.py results/analysis.json results/
+
+# Or via uv:
+uv run scripts/visualize_synthesis.py results/analysis.json results/
+```
+
+**Required:** `uv` on PATH (no pip/venv needed).
+
+**Outputs:**
+
+| File | Type | Description |
+|------|------|-------------|
+| `gas_boxplot.svg` | Box + strip | Distribution with quartiles, mean, std-dev overlay |
+| `gas_violin.svg` | Violin | Full distribution shape (reveals multimodality) |
+| `gas_scatter.svg` | Scatter | Gas vs test_run_id, colored by group |
+| `gas_histogram.svg` | Histogram | One subplot per group (faceted) |
+| `gas_ecdf.svg` | ECDF | Empirical CDF for direct group comparison |
 
 ## Key Patterns
 
