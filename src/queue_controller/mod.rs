@@ -154,6 +154,7 @@ fn setup_claude_and_git(
     project_dir: &Path,
     endpoint: &claude::ModelEndpoint,
     project_name: &str,
+    api_key: &str,
     git_ssh_key: Option<&PathBuf>,
     seed: u64,
     iteration: u64,
@@ -167,6 +168,7 @@ fn setup_claude_and_git(
         project_dir,
         &endpoint.url,
         &endpoint.model_name,
+        api_key,
         &project_dir_str,
         project_name,
     )?;
@@ -494,10 +496,22 @@ pub fn run(args: Args) -> Result<()> {
         let (project_dir, system_prompt) =
             prepare_project_environment(&args.project_root, &job.project)?;
 
+        // Determine API key based on execution mode.
+        // Cluster: not-needed (no auth required for local tunnel).
+        // API: user-provided key from --api-key arg.
+        let api_key = match &job.execution_mode {
+            ExecutionMode::Cluster => "not-needed",
+            ExecutionMode::Api => args
+                .api_key
+                .as_deref()
+                .context("--api-key is required for API execution mode")?,
+        };
+
         let (backup, synthesis_branch) = setup_claude_and_git(
             &project_dir,
             &model_endpoint,
             &job.project,
+            api_key,
             args.git_ssh_key.as_ref(),
             seed,
             iteration,

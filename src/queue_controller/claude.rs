@@ -23,11 +23,13 @@ pub fn resolve_project_dir(project_root: &Path, project_name: &str) -> PathBuf {
 }
 
 /// Inject `mcpServers` into `.claude/settings.local.json` (takes precedence over settings.json).
+/// Also sets `customModel` and `env` to match the target model endpoint.
 /// Backs up existing file, returns backup path.
 pub fn setup_claude_settings(
     project_dir: &Path,
-    _model_url: &str,
-    _model_name: &str,
+    model_url: &str,
+    model_name: &str,
+    api_key: &str,
     mcp_cwd: &str,
     mcp_project: &str,
 ) -> Result<Option<PathBuf>> {
@@ -64,6 +66,26 @@ pub fn setup_claude_settings(
             "env": {}
         }
     });
+
+    // Override customModel and env to match the actual endpoint.
+    // Required for API mode (external URL); also correct for cluster mode
+    // (localhost tunnel overwrites the same values the file already has).
+    settings["customModel"] = serde_json::json!({
+        "apiKey": api_key,
+        "modelCapabilities": ["completion"],
+        "modelName": model_name,
+        "provider": "openai",
+        "url": model_url,
+    });
+    if let Some(env) = settings["env"].as_object_mut() {
+        env.insert("ANTHROPIC_BASE_URL".into(), serde_json::json!(model_url));
+        env.insert("ANTHROPIC_MODEL".into(), serde_json::json!(model_name));
+    } else {
+        let mut env = serde_json::Map::new();
+        env.insert("ANTHROPIC_BASE_URL".into(), serde_json::json!(model_url));
+        env.insert("ANTHROPIC_MODEL".into(), serde_json::json!(model_name));
+        settings["env"] = serde_json::Value::Object(env);
+    }
 
     let content = serde_json::to_string_pretty(&settings)?;
     std::fs::write(&settings_path, content)?;

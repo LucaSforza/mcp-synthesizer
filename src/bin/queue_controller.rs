@@ -55,6 +55,11 @@ pub struct Args {
     /// If omitted, Git persistence is skipped.
     #[arg(long)]
     pub git_ssh_key: Option<PathBuf>,
+
+    /// API key for external model endpoints (API mode).
+    /// Required when processing API-mode jobs; ignored for cluster mode.
+    #[arg(long)]
+    pub api_key: Option<String>,
 }
 
 fn main() {
