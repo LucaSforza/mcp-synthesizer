@@ -45,12 +45,45 @@ pub fn parse_output_file(path: &Path) -> Result<UsageTotals> {
 
 /// Extract camelCase totals from a JSON object.
 ///
-/// Checks root first, then nested under a single key (e.g. `{"result":{...}}`).
+/// Checks root first, then nested under a single key (e.g. `{"result":{...}}`),
+/// then `modelUsage.{model_name}.inputTokens` (Claude Code result format),
+/// then `usage.{input_tokens}` (snake_case variant).
 fn try_parse_summary_usage(val: &Value) -> Option<UsageTotals> {
-    extract_camel_case_totals(val).or_else(|| {
-        val.as_object()?
-            .values()
-            .find_map(extract_camel_case_totals)
+    extract_camel_case_totals(val)
+        .or_else(|| {
+            val.as_object()?
+                .values()
+                .find_map(extract_camel_case_totals)
+        })
+        .or_else(|| try_parse_model_usage(val))
+        .or_else(|| try_parse_usage_snake_case(val))
+}
+
+/// Handle `modelUsage.{model_name}.{inputTokens,...}` — Claude Code result format.
+fn try_parse_model_usage(val: &Value) -> Option<UsageTotals> {
+    let obj = val.as_object()?;
+    let mu = obj.get("modelUsage")?.as_object()?;
+    for model_obj in mu.values() {
+        if let Some(totals) = extract_camel_case_totals(model_obj) {
+            return Some(totals);
+        }
+    }
+    None
+}
+
+/// Handle `usage.{input_tokens,...}` (snake_case) with `total_cost_usd` at root.
+fn try_parse_usage_snake_case(val: &Value) -> Option<UsageTotals> {
+    let obj = val.as_object()?;
+    let usage = obj.get("usage")?.as_object()?;
+    let cost = obj
+        .get("total_cost_usd")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    Some(UsageTotals {
+        input_tokens: usage.get("input_tokens")?.as_u64()?,
+        output_tokens: usage.get("output_tokens")?.as_u64()?,
+        cache_read_input_tokens: usage.get("cache_read_input_tokens")?.as_u64()?,
+        cost_usd: cost,
     })
 }
 
@@ -180,6 +213,75 @@ mod tests {
         tmp.flush().unwrap();
         let t = parse_output_file(tmp.path()).unwrap();
         assert_eq!(t.input_tokens, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests that prove the bug: Claude Code result format not handled
+    // -----------------------------------------------------------------------
+
+    const TEST_JSONL_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_fixtures/qwen3-solidity-27B-Q6_K.gguf_1.jsonl"
+    );
+
+    const EXPECTED_IN: u64 = 43104;
+    const EXPECTED_OUT: u64 = 2164;
+    const EXPECTED_CACHE: u64 = 360519;
+    const EXPECTED_COST: f64 = 0.4498795;
+
+    #[test]
+    fn test_parse_real_jsonl_file() {
+        let path = std::path::Path::new(TEST_JSONL_PATH);
+        if !path.exists() {
+            eprintln!("[SKIP] test fixture not found: {TEST_JSONL_PATH}");
+            return;
+        }
+        let t = parse_output_file(path).unwrap();
+        assert_eq!(t.input_tokens, EXPECTED_IN, "input_tokens mismatch");
+        assert_eq!(t.output_tokens, EXPECTED_OUT, "output_tokens mismatch");
+        assert_eq!(
+            t.cache_read_input_tokens, EXPECTED_CACHE,
+            "cache_read_input_tokens mismatch"
+        );
+        assert!(
+            (t.cost_usd - EXPECTED_COST).abs() < 1e-6,
+            "cost_usd mismatch: {} != {}",
+            t.cost_usd,
+            EXPECTED_COST
+        );
+    }
+
+    #[test]
+    fn test_parse_model_usage_format() {
+        let line = r#"{
+            "type":"result",
+            "total_cost_usd":0.4498795,
+            "usage":{"input_tokens":43104,"output_tokens":2164,"cache_read_input_tokens":360519},
+            "modelUsage":{"qwen3-solidity-27B-Q6_K.gguf":{
+                "inputTokens":43104,"outputTokens":2164,"cacheReadInputTokens":360519,"costUSD":0.4498795
+            }}
+        }"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let t = try_parse_summary_usage(&v).unwrap();
+        assert_eq!(t.input_tokens, EXPECTED_IN);
+        assert_eq!(t.output_tokens, EXPECTED_OUT);
+        assert_eq!(t.cache_read_input_tokens, EXPECTED_CACHE);
+        assert!((t.cost_usd - EXPECTED_COST).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_snake_case_usage() {
+        let line = r#"{
+            "type":"result",
+            "total_cost_usd":0.4498795,
+            "usage":{"input_tokens":43104,"output_tokens":2164,"cache_read_input_tokens":360519}
+        }"#;
+        let v: Value = serde_json::from_str(line).unwrap();
+        let t = try_parse_summary_usage(&v).unwrap();
+        assert_eq!(t.input_tokens, EXPECTED_IN);
+        assert_eq!(t.output_tokens, EXPECTED_OUT);
+        assert_eq!(t.cache_read_input_tokens, EXPECTED_CACHE);
+        assert!((t.cost_usd - EXPECTED_COST).abs() < 1e-6);
     }
 
     fn test_redis_conn() -> Option<redis::Connection> {
