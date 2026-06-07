@@ -1,9 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "pandas>=1.5",
+#   "seaborn>=0.12",
+#   "matplotlib>=3.7",
+#   "numpy>=1.24",
+# ]
+# ///
 """
 Visualize synthesis experiment data from analysis.json.
 
 Usage:
-    python scripts/visualize_synthesis.py results/analysis.json results/
+    uv run scripts/visualize_synthesis.py results/analysis.json results/
 
 Outputs (in <output_dir>):
     gas_boxplot.svg      Box + strip plot with mean/std-dev overlay
