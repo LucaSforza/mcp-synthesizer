@@ -3,7 +3,7 @@
 //! Reads jobs from Redis sorted set `cluster_runs` (priority queue).
 //! Each entry references a Redis hash with job metadata.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use redis::Commands;
 use std::collections::HashMap;
 
@@ -100,7 +100,8 @@ impl QueueClient {
             let fields: HashMap<String, String> = redis::cmd("HGETALL")
                 .arg(format!("synthesis_trial:{tid_str}"))
                 .query(&mut self.conn)?;
-            if fields.get("result_type").map(|s| s.as_str()) == Some("succeeded_full") {
+            let val = fields.get("result_type").map(|s| s.as_str());
+            if val == Some("succeeded_full") || val == Some("succeeded_partial") {
                 return Ok(true);
             }
         }
