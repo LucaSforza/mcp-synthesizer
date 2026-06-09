@@ -1,0 +1,74 @@
+{
+  "groups": [
+    {
+      "label": "qwenSol",
+      "observations": [
+        {
+          "gas": 424743,
+          "test_run_id": 82,
+          "trial_id": 182
+        },
+        {
+          "gas": 388984,
+          "test_run_id": 83,
+          "trial_id": 184
+        },
+        {
+          "gas": 840032,
+          "test_run_id": 84,
+          "trial_id": 187
+        },
+        {
+          "gas": 246800,
+          "test_run_id": 85,
+          "trial_id": 191
+        },
+        {
+          "gas": 509438,
+          "test_run_id": 86,
+          "trial_id": 193
+        },
+        {
+          "gas": 785239,
+          "test_run_id": 87,
+          "trial_id": 196
+        },
+        {
+          "gas": 1071436,
+          "test_run_id": 88,
+          "trial_id": 200
+        },
+        {
+          "gas": 996058,
+          "test_run_id": 89,
+          "trial_id": 202
+        },
+        {
+          "gas": 809855,
+          "test_run_id": 90,
+          "trial_id": 203
+        },
+        {
+          "gas": 437975,
+          "test_run_id": 91,
+          "trial_id": 205
+        }
+      ],
+      "outliers": [],
+      "range": "82:91",
+      "statistics": {
+        "coefficient_of_variation": 0.4131324321915171,
+        "count": 10,
+        "iqr": 404436.75,
+        "max": 1071436,
+        "mean": 651056.0,
+        "median": 647338.5,
+        "min": 246800,
+        "q1": 428051.0,
+        "q3": 832487.75,
+        "std_dev": 268972.34877288033,
+        "variance": 72346124404.4
+      }
+    }
+  ]
+}
