@@ -183,6 +183,7 @@ impl Database for SqliteDatabase {
             project_id,
             compilation_passed: 0,
             compilation_not_passed: 0,
+            model_name: None,
         })
     }
 

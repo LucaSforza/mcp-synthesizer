@@ -25,14 +25,19 @@ impl SynthesisTools {
         project_name: String,
         number_invariants: i32,
         project_id: i64,
+        model_name: Option<String>,
     ) -> Self {
         eprintln!(
-            "[DEBUG] tools::new cwd=\"{}\" project=\"{}\" invariants={} project_id={}",
-            cwd, project_name, number_invariants, project_id
+            "[DEBUG] tools::new cwd=\"{}\" project=\"{}\" invariants={} project_id={} model_name={:?}",
+            cwd, project_name, number_invariants, project_id, model_name
         );
         let test_run = db
             .create_test_run(project_id)
             .expect("Failed to create test run for standalone tools");
+        if let Some(ref mn) = model_name {
+            db.set_test_run_model_name(test_run.id, mn)
+                .expect("Failed to set model_name on test run");
+        }
         eprintln!("[DEBUG] tools::new test_run_id={}", test_run.id);
         Self {
             cwd,

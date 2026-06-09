@@ -1,5 +1,5 @@
 # TODO List
 
-## Permettere altre possibili scelte per l'API da usare per la sintesi del software. Magari vorrei eseguire DeepSeek dalle API o altri modelli
+## Aggiungere al redis che in una test_run ci deve essere il nome del modello
 
-## Aggiungere costi in token (Token count [input, output, cached], costo USD)
+## Aggiungere seed al mcp_synth

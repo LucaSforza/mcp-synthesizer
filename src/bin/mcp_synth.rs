@@ -2,7 +2,7 @@
 mod synth;
 
 use clap::Parser;
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::{transport::stdio, ServiceExt};
 
 use synth::db::DbConfig;
 use synth::tools::SynthesisTools;
@@ -33,6 +33,10 @@ struct Args {
     /// Number of invariants to verify in Halmos
     #[arg(short, long, default_value_t = 0)]
     invariants: i32,
+
+    /// Model name used for this synthesis (e.g. qwen3-solidity-27B-Q6_K.gguf)
+    #[arg(long)]
+    model_name: Option<String>,
 }
 
 #[tokio::main]
@@ -81,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         args.project,
         args.invariants,
         project.id,
+        args.model_name,
     );
 
     eprintln!(

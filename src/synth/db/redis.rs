@@ -93,7 +93,20 @@ impl Database for RedisDatabase {
             project_id,
             compilation_passed: 0,
             compilation_not_passed: 0,
+            model_name: None,
         })
+    }
+
+    fn set_test_run_model_name(&self, test_run_id: i64, model_name: &str) -> Result<(), DbError> {
+        eprintln!(
+            "[DEBUG] RedisDatabase::set_test_run_model_name id={} model=\"{}\"",
+            test_run_id, model_name
+        );
+        let mut conn = self.client.get_connection()?;
+        let key = format!("test_run:{}", test_run_id);
+        let _: bool = conn.hset(&key, "model_name", model_name)?;
+        eprintln!("[DEBUG] RedisDatabase::set_test_run_model_name::ok");
+        Ok(())
     }
 
     fn record_trial(

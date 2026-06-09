@@ -61,7 +61,8 @@ pub fn setup_claude_settings(
             "args": [
                 "--cwd", mcp_cwd,
                 "--project", mcp_project,
-                "--db-type", "redis"
+                "--db-type", "redis",
+                "--model-name", model_name
             ],
             "env": {}
         }
@@ -97,7 +98,8 @@ pub fn setup_claude_settings(
                 "args": [
                     "--cwd", mcp_cwd,
                     "--project", mcp_project,
-                    "--db-type", "redis"
+                    "--db-type", "redis",
+                    "--model-name", model_name
                 ],
                 "env": {}
             }

@@ -20,6 +20,7 @@ pub struct TestRun {
     pub project_id: i64,
     pub compilation_passed: i32,
     pub compilation_not_passed: i32,
+    pub model_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +133,9 @@ pub trait Database: Send {
     fn get_or_create_project(&self, name: &str, number_invariants: i32)
     -> Result<Project, DbError>;
     fn create_test_run(&self, project_id: i64) -> Result<TestRun, DbError>;
+    fn set_test_run_model_name(&self, _test_run_id: i64, _model_name: &str) -> Result<(), DbError> {
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     fn record_trial(
         &self,

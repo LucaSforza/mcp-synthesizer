@@ -34,6 +34,24 @@ fn test_create_test_run() {
     assert_eq!(tr.project_id, project.id);
     assert_eq!(tr.compilation_passed, 0);
     assert_eq!(tr.compilation_not_passed, 0);
+    assert!(tr.model_name.is_none());
+}
+
+#[test]
+fn test_create_test_run_with_model_name() {
+    let db = setup_db();
+    let project = db.get_or_create_project("p", 2).unwrap();
+    let tr = db.create_test_run(project.id).unwrap();
+    db.set_test_run_model_name(tr.id, "qwen3-27B.gguf").unwrap();
+    // Verify field persisted in Redis
+    let mut conn = db.client.get_connection().expect("conn");
+    let key = format!("test_run:{}", tr.id);
+    let stored: String = ::redis::cmd("HGET")
+        .arg(&key)
+        .arg("model_name")
+        .query(&mut conn)
+        .expect("hget");
+    assert_eq!(stored, "qwen3-27B.gguf");
 }
 
 #[test]
@@ -231,6 +249,19 @@ fn test_get_metrics_aggregation() {
     assert_eq!(metrics.proven_invariants, 5);
     assert_eq!(metrics.unproven_invariants, 2);
     assert_eq!(metrics.succeeded_iterations, 1);
+}
+
+#[test]
+fn test_get_metrics_with_model_name() {
+    let db = setup_db();
+    let proj = db.get_or_create_project("p", 3).unwrap();
+    let tr = db.create_test_run(proj.id).unwrap();
+    db.set_test_run_model_name(tr.id, "test-model.gguf").unwrap();
+    db.increment_compilation_passed(tr.id).unwrap();
+    let metrics = db.get_metrics(proj.id).unwrap();
+    // Metrics must be unaffected by model_name field
+    assert_eq!(metrics.compilation_passed, 1);
+    assert_eq!(metrics.total_trials, 0);
 }
 
 #[test]
