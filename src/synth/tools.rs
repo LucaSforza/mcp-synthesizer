@@ -1,6 +1,8 @@
 use std::process::Command;
 use std::sync::Mutex;
 
+use rand_chacha::ChaCha8Rng;
+use rand_core::{RngCore, SeedableRng};
 use rmcp::{tool, tool_router};
 
 use crate::synth::db::{Database, DbConfig};
@@ -15,6 +17,7 @@ pub struct SynthesisTools {
     pub project_id: i64,
     pub test_run_id: i64,
     pub pipeline: Mutex<Option<SynthesisPipeline>>,
+    pub rng: Mutex<Option<ChaCha8Rng>>,
 }
 
 impl SynthesisTools {
@@ -26,10 +29,11 @@ impl SynthesisTools {
         number_invariants: i32,
         project_id: i64,
         model_name: Option<String>,
+        fuzz_seed: Option<u64>,
     ) -> Self {
         eprintln!(
-            "[DEBUG] tools::new cwd=\"{}\" project=\"{}\" invariants={} project_id={} model_name={:?}",
-            cwd, project_name, number_invariants, project_id, model_name
+            "[DEBUG] tools::new cwd=\"{}\" project=\"{}\" invariants={} project_id={} model_name={:?} fuzz_seed={:?}",
+            cwd, project_name, number_invariants, project_id, model_name, fuzz_seed
         );
         let test_run = db
             .create_test_run(project_id)
@@ -38,6 +42,7 @@ impl SynthesisTools {
             db.set_test_run_model_name(test_run.id, mn)
                 .expect("Failed to set model_name on test run");
         }
+        let rng = fuzz_seed.map(ChaCha8Rng::seed_from_u64);
         eprintln!("[DEBUG] tools::new test_run_id={}", test_run.id);
         Self {
             cwd,
@@ -48,7 +53,12 @@ impl SynthesisTools {
             project_id,
             test_run_id: test_run.id,
             pipeline: Mutex::new(None),
+            rng: Mutex::new(rng),
         }
+    }
+
+    fn next_fuzz_seed(&self) -> Option<u64> {
+        self.rng.lock().ok()?.as_mut().map(|r| r.next_u64())
     }
 }
 
@@ -157,9 +167,16 @@ impl SynthesisTools {
     )]
     fn forge_test(&self) -> Result<String, String> {
         eprintln!("[DEBUG] tools::forge_test cwd=\"{}\"", self.cwd);
+        let fuzz_seed = self.next_fuzz_seed();
+        let seed_str = fuzz_seed.map(|s| s.to_string());
+        let mut args: Vec<&str> = vec!["test", "--json"];
+        if let Some(ref s) = seed_str {
+            args.push("--fuzz-seed");
+            args.push(s);
+        }
         let output = Command::new("forge")
             .current_dir(&self.cwd)
-            .args(["test", "--json"])
+            .args(&args)
             .output()
             .map_err(|e| {
                 eprintln!("[DEBUG] tools::forge_test::err io_error=\"{}\"", e);
@@ -255,7 +272,7 @@ impl SynthesisTools {
             "[DEBUG] tools::run_synthesis::before_run iteration={}",
             pipeline.iteration
         );
-        let report = pipeline.run();
+        let report = pipeline.run(self.next_fuzz_seed());
         eprintln!(
             "[DEBUG] tools::run_synthesis::report iteration={} stage={} passed={} has_metrics={}",
             pipeline.iteration,

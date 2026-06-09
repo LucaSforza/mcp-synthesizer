@@ -93,7 +93,7 @@ Written and read by `mcp_synth`. Not accessed by `queue_controller` or `populate
 | Key | Type | Fields / Values | Written by | Read by |
 |---|---|---|---|---|
 | `test_run:ids` | String (INCR) | auto-increment counter | `mcp_synth` | `mcp_synth` |
-| `test_run:{id}` | Hash | `project_id`, `compilation_passed`, `compilation_not_passed`, `created_at` | `mcp_synth` | `mcp_synth` |
+| `test_run:{id}` | Hash | `project_id`, `compilation_passed`, `compilation_not_passed`, `model_name` (optional), `created_at` | `mcp_synth` | `mcp_synth` |
 | `test_run:by_project:{pid}` | Set | member = `{test_run_id}` | `mcp_synth` | `mcp_synth` |
 
 Example:

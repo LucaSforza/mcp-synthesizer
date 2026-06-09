@@ -278,7 +278,7 @@ project:ids                                         INCR counter
 project:{id}                                        Hash { name, number_invariants, created_at }
 project:name:{name}                                 String (project ID, uniqueness check)
 test_run:ids                                        INCR counter
-test_run:{id}                                       Hash { project_id, compilation_passed, compilation_not_passed, created_at }
+test_run:{id}                                       Hash { project_id, compilation_passed, compilation_not_passed, model_name (optional), created_at }
 test_run:by_project:{project_id}                    Set of test_run IDs
 synthesis_trial:ids                                 INCR counter
 synthesis_trial:{id}                                Hash { test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at }

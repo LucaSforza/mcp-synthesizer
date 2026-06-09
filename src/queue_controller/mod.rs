@@ -15,6 +15,8 @@ mod synthesis_monitor;
 mod health;
 
 use anyhow::{Context, Result, bail};
+use rand_chacha::ChaCha8Rng;
+use rand_core::{RngCore, SeedableRng};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::path::{Path, PathBuf};
@@ -158,6 +160,7 @@ fn setup_claude_and_git(
     git_ssh_key: Option<&PathBuf>,
     seed: u64,
     iteration: u64,
+    fuzz_seed: Option<u64>,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
     eprintln!(
         "[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch"
@@ -171,6 +174,7 @@ fn setup_claude_and_git(
         api_key,
         &project_dir_str,
         project_name,
+        fuzz_seed,
     )?;
     with_cleanup(|s| {
         s.settings_backup = backup.clone();
@@ -392,6 +396,11 @@ pub fn run(args: Args) -> Result<()> {
         let seed: u64 = job.seed.parse().context("seed is not a valid u64")?;
         let iteration = job_id as u64;
 
+        // Derive S1 (llama-server) and S2 (fuzz) deterministically from job seed.
+        let mut drng = ChaCha8Rng::seed_from_u64(seed);
+        let llama_seed = drng.next_u64();
+        let fuzz_seed = drng.next_u64();
+
         // Print job separator banner BEFORE setting per-job prefix, so it
         // stands out as the first visual element for this job.
         eprintln!("\n{}", "=".repeat(80));
@@ -426,7 +435,7 @@ pub fn run(args: Args) -> Result<()> {
                     &args.models_path,
                     &model_name,
                     &args.llama_path,
-                    &job.seed,
+                    &llama_seed.to_string(),
                 )?;
                 with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
 
@@ -454,7 +463,7 @@ pub fn run(args: Args) -> Result<()> {
                     &args.models_path,
                     &model_name,
                     &args.llama_path,
-                    &job.seed,
+                    &llama_seed.to_string(),
                     &args.cluster_host,
                     args.tunnel_port,
                     args.poll_interval,
@@ -515,6 +524,7 @@ pub fn run(args: Args) -> Result<()> {
             args.git_ssh_key.as_ref(),
             seed,
             iteration,
+            Some(fuzz_seed),
         )?;
 
         // ------------------------------------------------------------------

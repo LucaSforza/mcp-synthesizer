@@ -32,6 +32,7 @@ pub fn setup_claude_settings(
     api_key: &str,
     mcp_cwd: &str,
     mcp_project: &str,
+    fuzz_seed: Option<u64>,
 ) -> Result<Option<PathBuf>> {
     let claude_dir = project_dir.join(".claude");
     let settings_path = claude_dir.join("settings.local.json");
@@ -55,15 +56,16 @@ pub fn setup_claude_settings(
     };
 
     // Inject mcpServers while preserving all existing settings.
+    let seed_str = fuzz_seed.map(|s| s.to_string());
+    let mut synth_args = vec!["--cwd", mcp_cwd, "--project", mcp_project, "--db-type", "redis", "--model-name", model_name];
+    if let Some(ref s) = seed_str {
+        synth_args.push("--fuzz-seed");
+        synth_args.push(s);
+    }
     settings["mcpServers"] = serde_json::json!({
         "mcp_synth": {
             "command": "mcp_synth",
-            "args": [
-                "--cwd", mcp_cwd,
-                "--project", mcp_project,
-                "--db-type", "redis",
-                "--model-name", model_name
-            ],
+            "args": synth_args,
             "env": {}
         }
     });
@@ -91,16 +93,17 @@ pub fn setup_claude_settings(
     let content = serde_json::to_string_pretty(&settings)?;
     std::fs::write(&settings_path, content)?;
     // Also write standalone MCP config file for --mcp-config flag.
+    let seed_str = fuzz_seed.map(|s| s.to_string());
+    let mut mcp_args = vec!["--cwd", mcp_cwd, "--project", mcp_project, "--db-type", "redis", "--model-name", model_name];
+    if let Some(ref s) = seed_str {
+        mcp_args.push("--fuzz-seed");
+        mcp_args.push(s);
+    }
     let mcp_cfg: serde_json::Value = serde_json::json!({
         "mcpServers": {
             "mcp_synth": {
                 "command": "mcp_synth",
-                "args": [
-                    "--cwd", mcp_cwd,
-                    "--project", mcp_project,
-                    "--db-type", "redis",
-                    "--model-name", model_name
-                ],
+                "args": mcp_args,
                 "env": {}
             }
         }

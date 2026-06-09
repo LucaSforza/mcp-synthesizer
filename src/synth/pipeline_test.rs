@@ -68,7 +68,7 @@ fn test_build_passed() {
     push_ok(&mut ctx.pipeline, "build ok");
     push_ok(&mut ctx.pipeline, "test ok");
     push_ok(&mut ctx.pipeline, "halmos ok");
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(report.passed);
     assert_eq!(report.stage, "halmos");
     assert_eq!(ctx.pipeline.iteration, 1);
@@ -81,7 +81,7 @@ fn test_build_passed() {
 fn test_build_failed() {
     let mut ctx = setup(3);
     push_fail(&mut ctx.pipeline, "compiler error");
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(!report.passed);
     assert_eq!(report.stage, "build");
     let metrics = ctx.db.get_metrics(ctx.pipeline.project_id).unwrap();
@@ -95,7 +95,7 @@ fn test_test_failed() {
     let mut ctx = setup(3);
     push_ok(&mut ctx.pipeline, "build ok");
     push_fail(&mut ctx.pipeline, "test failure");
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(!report.passed);
     assert_eq!(report.stage, "test");
     let metrics = ctx.db.get_metrics(ctx.pipeline.project_id).unwrap();
@@ -112,7 +112,7 @@ fn test_halmos_succeeded_full() {
         r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":50000}}}}}}"#,
     );
     push_ok(&mut ctx.pipeline, "halmos: all proved");
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(report.passed);
     assert_eq!(report.stage, "halmos");
     assert_eq!(report.gas_of_implementation, Some(50000));
@@ -132,7 +132,7 @@ fn test_halmos_counterexample() {
         &mut ctx.pipeline,
         "Counterexample found: assertion violated",
     );
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(!report.passed);
     assert_eq!(report.stage, "halmos");
     assert_eq!(report.metrics.as_ref().unwrap().total_trials, 1);
@@ -144,7 +144,7 @@ fn test_halmos_partial() {
     push_ok(&mut ctx.pipeline, "build ok");
     push_ok(&mut ctx.pipeline, "tests pass");
     push_fail(&mut ctx.pipeline, "Timeout: unproved invariants: 2");
-    let report = ctx.pipeline.run();
+    let report = ctx.pipeline.run(None);
     assert!(report.passed);
     assert_eq!(report.stage, "halmos");
     let metrics = report.metrics.as_ref().unwrap();
@@ -157,14 +157,14 @@ fn test_multi_iteration_loop() {
     let mut ctx = setup(3);
     // Iteration 1: build fails
     push_fail(&mut ctx.pipeline, "build err");
-    let r1 = ctx.pipeline.run();
+    let r1 = ctx.pipeline.run(None);
     assert!(!r1.passed);
     assert_eq!(ctx.pipeline.iteration, 1);
 
     // Iteration 2: build passes, test fails
     push_ok(&mut ctx.pipeline, "build ok");
     push_fail(&mut ctx.pipeline, "test fail");
-    let r2 = ctx.pipeline.run();
+    let r2 = ctx.pipeline.run(None);
     assert!(!r2.passed);
     assert_eq!(ctx.pipeline.iteration, 2);
     assert_eq!(r2.stage, "test");
@@ -176,7 +176,7 @@ fn test_multi_iteration_loop() {
         r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":30000}}}}}}"#,
     );
     push_ok(&mut ctx.pipeline, "all good");
-    let r3 = ctx.pipeline.run();
+    let r3 = ctx.pipeline.run(None);
     assert!(r3.passed);
     assert_eq!(ctx.pipeline.iteration, 3);
     assert_eq!(r3.stage, "halmos");
@@ -263,7 +263,7 @@ fn test_iteration_resume_from_db() {
     push_ok(&mut pipeline, "build ok");
     push_ok(&mut pipeline, "tests pass");
     push_ok(&mut pipeline, "halmos ok");
-    let report = pipeline.run();
+    let report = pipeline.run(None);
     assert!(report.passed);
     assert_eq!(pipeline.iteration, 4);
 }
@@ -274,7 +274,7 @@ fn test_metrics_after_full_loop() {
     // 2 failed compilations → 1 succeeded_full
     for _ in 0..2 {
         push_fail(&mut ctx.pipeline, "build fail");
-        ctx.pipeline.run();
+        ctx.pipeline.run(None);
     }
     push_ok(&mut ctx.pipeline, "build ok");
     push_ok(
@@ -282,7 +282,7 @@ fn test_metrics_after_full_loop() {
         r#"{"A.t.sol:A":{"test_results":{"a()":{"status":"Success","kind":{"Unit":{"gas":75000}}}}}}"#,
     );
     push_ok(&mut ctx.pipeline, "all proven");
-    ctx.pipeline.run();
+    ctx.pipeline.run(None);
 
     let metrics = ctx.db.get_metrics(ctx.pipeline.project_id).unwrap();
     assert_eq!(metrics.total_trials, 3);

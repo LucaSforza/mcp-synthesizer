@@ -120,9 +120,12 @@ impl SynthesisPipeline {
         Ok((combined, success))
     }
 
-    pub fn run(&mut self) -> VerificationReport {
+    pub fn run(&mut self, fuzz_seed: Option<u64>) -> VerificationReport {
         self.iteration += 1;
-        eprintln!("[DEBUG] pipeline::run::start iteration={}", self.iteration);
+        eprintln!(
+            "[DEBUG] pipeline::run::start iteration={} fuzz_seed={:?}",
+            self.iteration, fuzz_seed
+        );
 
         // Phase A: Build
         let build_result = self.stage_build();
@@ -135,7 +138,7 @@ impl SynthesisPipeline {
         }
 
         // Phase A: Test
-        let test_result = self.stage_test();
+        let test_result = self.stage_test(fuzz_seed);
         if !test_result.passed {
             eprintln!(
                 "[DEBUG] pipeline::run::test_failed iteration={}",
@@ -231,14 +234,20 @@ impl SynthesisPipeline {
         }
     }
 
-    fn stage_test(&mut self) -> VerificationReport {
+    fn stage_test(&mut self, fuzz_seed: Option<u64>) -> VerificationReport {
         eprintln!(
-            "[DEBUG] pipeline::stage_test::start iteration={}",
-            self.iteration
+            "[DEBUG] pipeline::stage_test::start iteration={} fuzz_seed={:?}",
+            self.iteration, fuzz_seed
         );
         let start = Instant::now();
+        let seed_str = fuzz_seed.map(|s| s.to_string());
         let cwd = self.cwd.clone();
-        match self.run_command("forge", &["test", "--json"], &cwd) {
+        let mut forge_args: Vec<&str> = vec!["test", "--json"];
+        if let Some(ref s) = seed_str {
+            forge_args.push("--fuzz-seed");
+            forge_args.push(s);
+        }
+        match self.run_command("forge", &forge_args, &cwd) {
             Ok((output, true)) => {
                 self.forge_gas = extract_forge_gas_json(&output);
                 eprintln!(

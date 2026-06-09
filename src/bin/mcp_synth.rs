@@ -37,6 +37,10 @@ struct Args {
     /// Model name used for this synthesis (e.g. qwen3-solidity-27B-Q6_K.gguf)
     #[arg(long)]
     model_name: Option<String>,
+
+    /// Seed for deterministic Foundry fuzzing reproducibility
+    #[arg(long)]
+    fuzz_seed: Option<u64>,
 }
 
 #[tokio::main]
@@ -86,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         args.invariants,
         project.id,
         args.model_name,
+        args.fuzz_seed,
     );
 
     eprintln!(

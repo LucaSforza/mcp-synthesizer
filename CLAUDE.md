@@ -62,7 +62,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 
 **Flags:** `--cwd` (required), `--project` (required), `--invariants` (default 0),
 `--db-type` (default `redis`), `--redis-url` (default `redis://localhost:6379`),
-`--db-path` (used with `--db-type sqlite`)
+`--db-path` (used with `--db-type sqlite`), `--model-name` (optional, persisted to test_run)
 
 **Package:** `mcp_synth` (Cargo.toml name). Five binaries:
 
@@ -121,15 +121,16 @@ TEST_REDIS_URL=redis://localhost:6379/1 cargo test redis_tests -- --test-threads
 Single-threaded MCP server via stdio transport (`rmcp` SDK from git):
 
 ### `src/bin/mcp_synth.rs` — CLI entry point
-Parses `--cwd`, `--project`, `--invariants`, `--db-type`, `--redis-url`, `--db-path` with clap. Builds `DbConfig` from args, calls `DbConfig::connect()` to get `Box<dyn Database>`. Creates/loads project, creates test run. Serves `SynthesisTools` over rmcp stdio transport. Debug logging via `eprintln!` (`[DEBUG]` prefix).
+Parses `--cwd`, `--project`, `--invariants`, `--db-type`, `--redis-url`, `--db-path`, `--model-name` with clap. Builds `DbConfig` from args, calls `DbConfig::connect()` to get `Box<dyn Database>`. Creates/loads project, creates test run. Optionally persists `model_name` via `SynthesisTools`. Serves `SynthesisTools` over rmcp stdio transport. Debug logging via `eprintln!` (`[DEBUG]` prefix).
 
 ### `src/synth/db/` — Database trait, Redis + SQLite implementations
 
 **`src/synth/db/mod.rs`** — Shared definitions:
 - Data structs: `Project`, `TestRun`, `SynthesisTrial`, `Metrics`
 - `DbError` enum — `Redis(::redis::RedisError)`, `Sqlite(rusqlite::Error)`, `InvalidResultType(String)`. Implements `Display` + `std::error::Error` + `From` for both error types.
-- `Database` trait — 10 methods, all `&self`, bound `Send`:
-  `get_or_create_project`, `create_test_run`, `record_trial`, `get_max_iteration`,
+- `Database` trait — 11 methods, all `&self`, bound `Send`:
+  `get_or_create_project`, `create_test_run`, `set_test_run_model_name` (default no-op),
+  `record_trial`, `get_max_iteration`,
   `increment_compilation_passed`, `increment_compilation_not_passed`, `get_project`, `get_metrics`
 - `DbConfig` factory enum — `Redis { url }` + `Sqlite { path }`. `connect() -> Result<Box<dyn Database>, DbError>`.
 - `validate_trial_params()` — shared validation for result_type + invariant constraints
@@ -141,7 +142,7 @@ project:ids                                         -> INCR counter
 project:{id}                                        -> Hash { name, number_invariants, created_at }
 project:name:{name}                                 -> String (id, for uniqueness check)
 test_run:ids                                        -> INCR counter
-test_run:{id}                                       -> Hash { project_id, compilation_passed, compilation_not_passed, created_at }
+test_run:{id}                                       -> Hash { project_id, compilation_passed, compilation_not_passed, model_name (optional), created_at }
 test_run:by_project:{project_id}                    -> Set of test_run_ids
 synthesis_trial:ids                                 -> INCR counter
 synthesis_trial:{id}                                -> Hash { test_run_id, iteration, gas_of_implementation, result_type, not_proved_invariants, failure_detail, is_full_synthesis, created_at }
@@ -166,7 +167,7 @@ Constraints: succeeded_* must be last trial in test_run; `not_proved_invariants 
 **Metrics:** `get_metrics()` aggregates in Rust from Redis indices (no SQL GROUP BY) or via SQL queries for SQLite.
 
 **Tests:**
-- `src/db/redis_test.rs` — 15 tests, `FLUSHDB` on DB 1 per module
+- `src/db/redis_test.rs` — 17 tests, `FLUSHDB` on DB 1 per module
 - `src/db/sqlite_test.rs` — 15 tests, `:memory:` per module
 
 ### `src/synth/tools.rs` — MCP tool definitions
@@ -179,7 +180,7 @@ Constraints: succeeded_* must be last trial in test_run; `not_proved_invariants 
 | `forge_test` | Run `forge test --json`, parses gas from JSON output, records `succeeded_fuzzing`/`failed_fuzzing` trial | yes |
 | `run_synthesis` | Full pipeline (build → test → halmos), records detailed trial | no |
 
-`SynthesisTools` wraps `Mutex<Box<dyn Database>>` and `Mutex<Option<SynthesisPipeline>>`. `DbConfig` stored for lazy pipeline init. Pipeline is lazily initialized on first `run_synthesis` call via `DbConfig::connect()`.
+`SynthesisTools` wraps `Mutex<Box<dyn Database>>` and `Mutex<Option<SynthesisPipeline>>`. `DbConfig` stored for lazy pipeline init. Pipeline is lazily initialized on first `run_synthesis` call via `DbConfig::connect()`. On construction, if `model_name` is provided, calls `db.set_test_run_model_name()` to persist it in Redis via HSET.
 
 ### `src/synth/pipeline.rs` — Synthesis pipeline
 `SynthesisPipeline::run()` three-phase gating:
@@ -284,7 +285,7 @@ cluster_runs                                         -> Sorted Set (member="{mod
 | 2 | 4-5 | `submit_slurm_job` | Generate sbatch, `ssh sbatch` via stdin pipe |
 | 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
 | 3 | 7+7b | `prepare_project_environment` | Resolve project dir, read `prompt.md` |
-| 3 | 8+8b | `setup_claude_and_git` | Inject mcpServers in settings.local.json, create git branch |
+| 3 | 8+8b | `setup_claude_and_git` | Inject mcpServers (with `--model-name`) in settings.local.json, create git branch |
 | 4 | 9 | `run_claude_code` + `SynthesisMonitor` | Kill stale mcp_synth, spawn `claude -p` → monitor loop polls Claude exit + Slurm health, recovers model server on expiry |
 | 5 | 10+10b | `cleanup_environment` | Restore settings, `scancel` Slurm job |
 | 6 | 11 | `check_claude_result` | Verify exit status + `check_succeeded_full()` |
