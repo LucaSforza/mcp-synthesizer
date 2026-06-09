@@ -25,6 +25,7 @@ pub(crate) struct SynthesisMonitor {
     model_name: String,
     llama_path: String,
     seed: String,
+    ctx_size: u64,
     cluster_host: String,
     tunnel_port: u16,
     poll_interval: u64,
@@ -44,6 +45,7 @@ impl SynthesisMonitor {
         model_name: &str,
         llama_path: &str,
         seed: &str,
+        ctx_size: u64,
         cluster_host: &str,
         tunnel_port: u16,
         poll_interval: u64,
@@ -54,6 +56,7 @@ impl SynthesisMonitor {
             model_name: model_name.to_string(),
             llama_path: llama_path.to_string(),
             seed: seed.to_string(),
+            ctx_size,
             cluster_host: cluster_host.to_string(),
             tunnel_port,
             poll_interval,
@@ -111,7 +114,7 @@ impl SynthesisMonitor {
     fn recover(&mut self) -> Result<()> {
         eprintln!("[RECOVERY] Submitting new Slurm job...");
         let model_path = self.models_path.join(&self.model_name);
-        let sbatch = slurm::generate_sbatch(&model_path, &self.llama_path, &self.seed);
+        let sbatch = slurm::generate_sbatch(&model_path, &self.llama_path, &self.seed, self.ctx_size);
         let new_job_id = slurm::submit_sbatch(&self.cluster_host, &sbatch)?;
         eprintln!("[RECOVERY] Submitted new Slurm job {new_job_id}");
 

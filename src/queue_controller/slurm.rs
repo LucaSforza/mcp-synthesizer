@@ -82,7 +82,7 @@ impl Drop for TunnelHandle {
 
 /// Generate sbatch script content.
 /// Only MODEL_PATH, LLAMA_PATH and SEED are parameterized; everything else hardcoded.
-pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str) -> String {
+pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str, ctx_size: u64) -> String {
     let model_path_str = model_path.to_string_lossy();
     let model_slug = model_path
         .file_stem()
@@ -103,7 +103,7 @@ pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str) -> Strin
     --models-max 1 \
     -t 8 \
     -ngl 99 \
-    -c 100000 \
+    -c {ctx_size} \
     --host 0.0.0.0 \
     --cache-reuse 256 \
     --temp 0.6 \
@@ -119,6 +119,7 @@ pub fn generate_sbatch(model_path: &Path, llama_path: &str, seed: &str) -> Strin
         model_path = model_path_str,
         llama_path = llama_path,
         seed = seed,
+        ctx_size = ctx_size,
     )
 }
 

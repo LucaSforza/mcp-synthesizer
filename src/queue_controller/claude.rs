@@ -159,6 +159,7 @@ pub fn spawn_claude(
     system_prompt: &str,
     output_path: &Path,
     endpoint: &ModelEndpoint,
+    ctx_size: u64,
 ) -> Result<std::process::Child> {
     let file = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create output file {output_path:?}"))?;
@@ -193,7 +194,7 @@ pub fn spawn_claude(
         .env("CAVEMAN_DEFAULT_MODE", "wenyan")
         .env("ANTHROPIC_BASE_URL", &endpoint.url)
         .env("ANTHROPIC_MODEL", &endpoint.model_name)
-        .env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "100000")
+        .env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", ctx_size.to_string())
         .stdin(Stdio::inherit())
         .stdout(Stdio::from(file))
         .stderr(Stdio::inherit())

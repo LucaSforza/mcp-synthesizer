@@ -60,6 +60,10 @@ pub struct Args {
     /// Required when processing API-mode jobs; ignored for cluster mode.
     #[arg(long)]
     pub api_key: Option<String>,
+
+    /// Context window size for Claude Code and llama-server.
+    #[arg(long, default_value_t = 200000)]
+    pub ctx_size: u64,
 }
 
 fn main() {

@@ -80,12 +80,13 @@ fn submit_slurm_job(
     model_name: &str,
     llama_path: &str,
     seed: &str,
+    ctx_size: u64,
 ) -> Result<String> {
     eprintln!("[DEBUG] [Step 4-5] submit_slurm_job — generate sbatch, submit via SSH");
     let model_path = models_path.join(model_name);
     eprintln!("[DEBUG] Model path: {model_path:?}");
 
-    let sbatch = slurm::generate_sbatch(&model_path, llama_path, seed);
+    let sbatch = slurm::generate_sbatch(&model_path, llama_path, seed, ctx_size);
     let slurm_job_id = slurm::submit_sbatch(cluster_host, &sbatch)?;
     eprintln!("[DEBUG] Submitted Slurm job {slurm_job_id}");
     Ok(slurm_job_id)
@@ -208,12 +209,13 @@ fn run_claude_code(
     system_prompt: &str,
     endpoint: &claude::ModelEndpoint,
     job_id_str: &str,
+    ctx_size: u64,
 ) -> Result<(std::process::Child, PathBuf)> {
     eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
     eprintln!("[DEBUG] Launching Claude Code...");
     let output_path = project_dir.join(format!("{}_{}.jsonl", endpoint.model_name, job_id_str));
-    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, endpoint)?;
+    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, endpoint, ctx_size)?;
     Ok((child, output_path))
 }
 
@@ -436,6 +438,7 @@ pub fn run(args: Args) -> Result<()> {
                     &model_name,
                     &args.llama_path,
                     &llama_seed.to_string(),
+                    args.ctx_size,
                 )?;
                 with_cleanup(|s| s.slurm_job_id = Some(slurm_job_id.clone()));
 
@@ -464,6 +467,7 @@ pub fn run(args: Args) -> Result<()> {
                     &model_name,
                     &args.llama_path,
                     &llama_seed.to_string(),
+                    args.ctx_size,
                     &args.cluster_host,
                     args.tunnel_port,
                     args.poll_interval,
@@ -536,6 +540,7 @@ pub fn run(args: Args) -> Result<()> {
             &system_prompt,
             &model_endpoint,
             &job_id_str,
+            args.ctx_size,
         )?;
         let child_pid = claude_child.id();
         with_cleanup(|s| s.claude_child_pid = Some(child_pid));
