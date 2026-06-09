@@ -1,6 +1,6 @@
 //! Queue controller: automated synthesis execution on Slurm cluster.
 //!
-//! Reads jobs from Redis priority queue (`cluster_runs`), submits Slurm
+//! Reads jobs from Redis priority queue (`cluster_runs`, oldest-first), submits Slurm
 //! jobs for model serving, launches Claude Code with MCP integration.
 //! Processes sequentially until queue empty.
 

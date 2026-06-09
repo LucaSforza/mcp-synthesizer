@@ -186,7 +186,7 @@ queue_controller \
 
 ### Processing Loop
 
-1. `ZREVRANGE cluster_runs 0 0 WITHSCORES` → peek (no removal)
+1. `ZRANGE cluster_runs 0 0 WITHSCORES` → peek oldest/first-inserted (no removal)
 2. Parse `{model}:{id}`, HGETALL job hash, validate fields
 3. Construct model path, generate sbatch (MODEL_PATH + LLAMA_PATH + SEED)
 4. `ssh cluster "sbatch"` via stdin → capture Slurm job ID

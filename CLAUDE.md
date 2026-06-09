@@ -281,7 +281,7 @@ cluster_runs                                         -> Sorted Set (member="{mod
 | 0 | startup | `health::run_startup_checks` | Once before loop: cluster SSH, Slurm, models dir, llama path, claude binary, project root, SSH key |
 | 0 | per-iteration | `health::run_loop_checks` | Each iteration: Redis ping, cluster SSH, claude binary |
 | 0 | preflight | `health::run_job_preflight_checks` | After job load, before Slurm: project dir, prompt.md, git repo |
-| 1 | 1-3 | `peek_and_load_job` | ZREVRANGE peek, parse `{model}:{id}`, HGETALL metadata |
+| 1 | 1-3 | `peek_and_load_job` | ZRANGE peek (oldest first), parse `{model}:{id}`, HGETALL metadata |
 | 2 | 4-5 | `submit_slurm_job` | Generate sbatch, `ssh sbatch` via stdin pipe |
 | 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
 | 3 | 7+7b | `prepare_project_environment` | Resolve project dir, read `prompt.md` |

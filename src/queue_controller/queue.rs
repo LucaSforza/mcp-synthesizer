@@ -47,10 +47,10 @@ impl QueueClient {
         Ok(())
     }
 
-    /// Read highest-priority job from `cluster_runs` without removing.
+    /// Read lowest-priority (oldest/first-inserted) job from `cluster_runs` without removing.
     /// Returns `(member, score)` where member is `"{model_name}:{job_id}"`.
     pub fn peek_job(&mut self) -> Result<Option<(String, f64)>> {
-        let results: Vec<(String, f64)> = redis::cmd("ZREVRANGE")
+        let results: Vec<(String, f64)> = redis::cmd("ZRANGE")
             .arg("cluster_runs")
             .arg("0")
             .arg("0")
