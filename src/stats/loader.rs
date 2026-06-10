@@ -99,8 +99,11 @@ impl RedisLoader {
             }
 
             // Push best gas (last succeeded_full/partial, i.e. highest iteration).
+            // Skip observations missing token/cost data (manual runs, not queue controller).
             if let Some(obs) = best_gas {
-                group.add_observation(obs);
+                if obs.total_tokens > 0 || obs.cost_of_synthesis_usd > 0.0 {
+                    group.add_observation(obs);
+                }
             }
         }
 
