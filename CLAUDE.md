@@ -418,12 +418,12 @@ cargo run --bin stats_export -- \
 
 | File | Responsibility |
 |------|----------------|
-| `types.rs` | `GasObservation`, `ExperimentGroup`, `GroupStatistics`, `Outlier` |
+| `types.rs` | `GasObservation` (gas, total_tokens, cost, model_name, project_id), `ExperimentGroup`, `GroupStatistics`, `Outlier` |
 | `parser.rs` | Range parser (`label=start:end`) |
-| `loader.rs` | `RedisLoader` — read-only extraction from Redis |
-| `statistics.rs` | Statistical functions: mean, median, variance, std_dev, quartiles, IQR, CV, outlier detection |
-| `report.rs` | JSON/CSV/Markdown report generation + `analysis.json` |
-| `statistics_test.rs` | 26 tests for statistical computations |
+| `loader.rs` | `RedisLoader` — reads trial + test_run hashes; includes `succeeded_full`/`succeeded_partial`; skips observations missing token/cost data |
+| `statistics.rs` | Statistical functions + `detect_knee()` (geometric) + `compute_pareto_frontier()` (generic, closure-based) |
+| `report.rs` | JSON/CSV/Markdown report generation; `analysis.json` includes `knee_analysis` + `pareto_frontier` (cost/tokens) |
+| `statistics_test.rs` | 35 tests for statistical computations |
 | `parser_test.rs` | 11 tests for range parsing |
 
 ### `scripts/visualize_synthesis.py` — Python visualization
@@ -449,6 +449,10 @@ uv run scripts/visualize_synthesis.py results/analysis.json results/
 | `gas_scatter.svg` | Scatter | Gas vs test_run_id, colored by group |
 | `gas_histogram.svg` | Histogram | One subplot per group (faceted) |
 | `gas_ecdf.svg` | ECDF | Empirical CDF for direct group comparison |
+| `gas_vs_tokens.svg` | Scatter | Gas vs total tokens with knee point |
+| `gas_vs_cost.svg` | Scatter | Gas vs synthesis cost with knee point |
+| `gas_cost_pareto.svg` | Pareto | Cost-based Pareto frontier (colorblind-friendly: shape+color) |
+| `gas_tokens_pareto.svg` | Pareto | Token-based Pareto frontier (colorblind-friendly) |
 
 ## Key Patterns
 
@@ -470,6 +474,11 @@ uv run scripts/visualize_synthesis.py results/analysis.json results/
 - `JobState::is_terminal()` on `slurm::JobState` — classifies terminal states (Completed, Failed, Cancelled, Timeout, NotFound) for expiry detection. `get_job_state` made `pub(crate)` for monitor access
 - `health.rs` four-level validation: `run_startup_checks` (once before loop), `run_cluster_startup_checks` (lazy, only when cluster-mode job loaded), `run_loop_checks` (every iteration), `run_job_preflight_checks` (after job load, before cluster alloc). Each check is a private function with `[HEALTH]` prefixed logging, called from public orchestrator functions that bail on first failure
 - `QueueClient::ping()` — lightweight Redis connectivity check via `PING`, used by `run_loop_checks` to detect dropped connections mid-run
+- `detect_knee()` — geometric knee detection via max perpendicular distance from chord; used for diminishing-returns analysis of tokens/gas and cost/gas
+- `compute_pareto_frontier()` — generic, takes `x_extract`/`y_extract` closures; dual frontier computed during export (cost + tokens), stored in `analysis.json["pareto_frontier"]["cost"|"tokens"]`
+- `_pareto_plot()` — shared Python helper for both Pareto SVGs; each group gets a distinct marker shape (colorblind-friendly), frontier points use same shape enlarged with red edge
+- `GasObservation` enriched with `total_tokens`, `cost_of_synthesis_usd`, `model_name`, `project_id` from `test_run:{id}` hash — loader reads both `test_run` and `synthesis_trial` hashes
+- Observations without token/cost data (manual runs outside queue_controller) are filtered out during load to avoid polluting statistics with incomplete syntheses
 - CLI Args defined in `src/bin/queue_controller.rs`, not in `mod.rs` — binary owns its interface
 - Edition 2024, musl target for static linking
 
