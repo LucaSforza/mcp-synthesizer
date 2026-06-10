@@ -167,20 +167,22 @@ fn generate_analysis_json(
         None
     };
 
-    let pareto = compute_pareto_frontier(&analyzable);
+    let cost_pareto = compute_pareto_frontier(&analyzable, |o| o.cost_of_synthesis_usd, |o| o.gas as f64);
+    let token_pareto = compute_pareto_frontier(&analyzable, |o| o.total_tokens as f64, |o| o.gas as f64);
 
-    let pareto_observations: Vec<Pareobs> = pareto
-        .iter()
-        .map(|o| Pareobs {
-            test_run_id: o.test_run_id,
-            trial_id: o.trial_id,
-            gas: o.gas,
-            total_tokens: o.total_tokens,
-            cost_of_synthesis_usd: o.cost_of_synthesis_usd,
-            model_name: o.model_name.clone(),
-            project_id: o.project_id,
-        })
-        .collect();
+    let map_pareto = |obs: &[&GasObservation]| -> Vec<Pareobs> {
+        obs.iter()
+            .map(|o| Pareobs {
+                test_run_id: o.test_run_id,
+                trial_id: o.trial_id,
+                gas: o.gas,
+                total_tokens: o.total_tokens,
+                cost_of_synthesis_usd: o.cost_of_synthesis_usd,
+                model_name: o.model_name.clone(),
+                project_id: o.project_id,
+            })
+            .collect()
+    };
 
     let json = serde_json::to_string_pretty(&serde_json::json!({
         "groups": groups_out,
@@ -197,7 +199,8 @@ fn generate_analysis_json(
             }),
         },
         "pareto_frontier": {
-            "observations": pareto_observations,
+            "cost": map_pareto(&cost_pareto),
+            "tokens": map_pareto(&token_pareto),
         },
     }))
     .context("failed to serialize analysis JSON")?;

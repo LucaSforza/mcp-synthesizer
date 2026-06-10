@@ -311,7 +311,7 @@ fn test_pareto_frontier_basic() {
         GasObservation::new(2, 2, 200),
         GasObservation::new(3, 3, 150),
     ];
-    let frontier = compute_pareto_frontier(&obs);
+    let frontier = compute_pareto_frontier(&obs, |o| o.cost_of_synthesis_usd, |o| o.gas as f64);
     // All have zero cost/tokens → filtered out → empty frontier.
     assert!(frontier.is_empty());
 }
@@ -328,7 +328,7 @@ fn test_pareto_frontier_with_costs() {
     o3.cost_of_synthesis_usd = 0.08;
     o3.total_tokens = 800;
     let obs = vec![o1, o2, o3];
-    let frontier = compute_pareto_frontier(&obs);
+    let frontier = compute_pareto_frontier(&obs, |o| o.cost_of_synthesis_usd, |o| o.gas as f64);
     // All 3 are non-dominated: each has a unique cost/gas trade-off.
     assert_eq!(frontier.len(), 3);
 }
@@ -345,7 +345,7 @@ fn test_pareto_frontier_dominated() {
     o3.cost_of_synthesis_usd = 0.15;
     o3.total_tokens = 300;
     let obs = vec![o1, o2, o3];
-    let frontier = compute_pareto_frontier(&obs);
+    let frontier = compute_pareto_frontier(&obs, |o| o.cost_of_synthesis_usd, |o| o.gas as f64);
     // obs[2] (cost=0.15, gas=300) dominated by obs[0] (cost=0.10, gas=100).
     assert_eq!(frontier.len(), 2);
     let frontier_ids: Vec<u64> = frontier.iter().map(|o| o.test_run_id).collect();
@@ -355,5 +355,25 @@ fn test_pareto_frontier_dominated() {
 #[test]
 fn test_pareto_frontier_empty() {
     let obs: Vec<GasObservation> = vec![];
-    assert!(compute_pareto_frontier(&obs).is_empty());
+    assert!(compute_pareto_frontier(&obs, |o| o.cost_of_synthesis_usd, |o| o.gas as f64).is_empty());
+}
+
+#[test]
+fn test_pareto_frontier_tokens() {
+    let mut o1 = GasObservation::new(1, 1, 100);
+    o1.total_tokens = 1000;
+    o1.cost_of_synthesis_usd = 0.10;
+    let mut o2 = GasObservation::new(2, 2, 200);
+    o2.total_tokens = 500;
+    o2.cost_of_synthesis_usd = 0.05;
+    let mut o3 = GasObservation::new(3, 3, 150);
+    o3.total_tokens = 800;
+    o3.cost_of_synthesis_usd = 0.08;
+    let obs = vec![o1, o2, o3];
+    // Token-based frontier: all 3 have unique token/gas trade-offs.
+    let token_frontier = compute_pareto_frontier(&obs, |o| o.total_tokens as f64, |o| o.gas as f64);
+    assert_eq!(token_frontier.len(), 3);
+    // Cost-based frontier: all 3 still non-dominated.
+    let cost_frontier = compute_pareto_frontier(&obs, |o| o.cost_of_synthesis_usd, |o| o.gas as f64);
+    assert_eq!(cost_frontier.len(), 3);
 }

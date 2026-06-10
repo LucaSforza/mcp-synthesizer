@@ -23,6 +23,7 @@ Outputs (in <output_dir>):
     gas_vs_tokens.svg    Gas vs total tokens with knee point
     gas_vs_cost.svg      Gas vs synthesis cost with knee point
     gas_cost_pareto.svg  Pareto frontier for gas-cost trade-off
+    gas_tokens_pareto.svg  Pareto frontier for gas-token trade-off
 """
 
 import json
@@ -274,7 +275,7 @@ def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> s
         )
 
     # Pareto frontier from precomputed data.
-    pareto = analysis.get("pareto_frontier", {}).get("observations", [])
+    pareto = analysis.get("pareto_frontier", {}).get("cost", [])
     if pareto:
         px = [p["cost_of_synthesis_usd"] for p in pareto]
         py = [p["gas"] for p in pareto]
@@ -295,6 +296,46 @@ def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> s
     ax.legend(title="Group")
 
     path = os.path.join(output_dir, "gas_cost_pareto.svg")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_gas_tokens_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot with token-based Pareto frontier overlaid."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    plot_df = df[df["total_tokens"] > 0].copy()
+
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
+        ax.scatter(
+            subset["total_tokens"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
+        )
+
+    pareto = analysis.get("pareto_frontier", {}).get("tokens", [])
+    if pareto:
+        px = [p["total_tokens"] for p in pareto]
+        py = [p["gas"] for p in pareto]
+        ax.plot(
+            px, py,
+            color="red", linewidth=2.5, linestyle="--",
+            label=f"Pareto Frontier ({len(pareto)} pts)",
+        )
+        ax.scatter(
+            px, py,
+            color="red", s=80, zorder=5, edgecolors="darkred",
+            linewidth=1,
+        )
+
+    ax.set_xlabel("Total Tokens (Input + Output)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas-Tokens Pareto Frontier", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
+
+    path = os.path.join(output_dir, "gas_tokens_pareto.svg")
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -329,6 +370,7 @@ def main() -> None:
         plot_gas_vs_tokens(analysis, df, output_dir),
         plot_gas_vs_cost(analysis, df, output_dir),
         plot_gas_cost_pareto(analysis, df, output_dir),
+        plot_gas_tokens_pareto(analysis, df, output_dir),
     ]
 
     for path in paths:

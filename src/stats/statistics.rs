@@ -203,12 +203,21 @@ pub fn detect_knee(x: &[f64], y: &[f64]) -> Option<(f64, f64)> {
     knee
 }
 
-/// Compute the Pareto frontier for cost vs gas (both to be minimized).
+/// Compute the Pareto frontier for a pair of metrics (both to be minimized).
 ///
-/// An observation is Pareto-optimal if no other observation has
-/// lower-or-equal cost AND lower-or-equal gas, with at least one strict improvement.
+/// `x_extract` and `y_extract` are closures that project an observation to the
+/// two dimensions.  An observation is Pareto-optimal if no other observation
+/// has lower-or-equal x AND lower-or-equal y, with at least one strict improvement.
 /// Observations with zero tokens AND zero cost are excluded from the analysis.
-pub fn compute_pareto_frontier(observations: &[GasObservation]) -> Vec<&GasObservation> {
+pub fn compute_pareto_frontier<'a, F1, F2>(
+    observations: &'a [GasObservation],
+    x_extract: F1,
+    y_extract: F2,
+) -> Vec<&'a GasObservation>
+where
+    F1: Fn(&GasObservation) -> f64,
+    F2: Fn(&GasObservation) -> f64,
+{
     let candidates: Vec<&GasObservation> = observations
         .iter()
         .filter(|o| o.total_tokens > 0 || o.cost_of_synthesis_usd > 0.0)
@@ -221,27 +230,24 @@ pub fn compute_pareto_frontier(observations: &[GasObservation]) -> Vec<&GasObser
     let mut frontier: Vec<&GasObservation> = Vec::new();
 
     'outer: for obs in &candidates {
+        let x_obs = x_extract(obs);
+        let y_obs = y_extract(obs);
         for other in &candidates {
             let same = std::ptr::eq(*other, *obs);
             if same {
                 continue;
             }
-            let cost_leq = other.cost_of_synthesis_usd <= obs.cost_of_synthesis_usd;
-            let gas_leq = (other.gas as f64) <= (obs.gas as f64);
-            let strictly_better = other.cost_of_synthesis_usd < obs.cost_of_synthesis_usd
-                || (other.gas as f64) < (obs.gas as f64);
-            if cost_leq && gas_leq && strictly_better {
+            let x_leq = x_extract(other) <= x_obs;
+            let y_leq = y_extract(other) <= y_obs;
+            let strictly_better = x_extract(other) < x_obs || y_extract(other) < y_obs;
+            if x_leq && y_leq && strictly_better {
                 continue 'outer;
             }
         }
         frontier.push(obs);
     }
 
-    frontier.sort_by(|a, b| {
-        a.cost_of_synthesis_usd
-            .partial_cmp(&b.cost_of_synthesis_usd)
-            .unwrap()
-    });
+    frontier.sort_by(|a, b| x_extract(a).partial_cmp(&x_extract(b)).unwrap());
 
     frontier
 }
