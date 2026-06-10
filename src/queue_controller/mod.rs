@@ -11,8 +11,8 @@ mod slurm;
 mod synthesis_usage;
 
 mod cleanup;
-mod synthesis_monitor;
 mod health;
+mod synthesis_monitor;
 
 use anyhow::{Context, Result, bail};
 use rand_chacha::ChaCha8Rng;
@@ -214,8 +214,19 @@ fn run_claude_code(
     eprintln!("[DEBUG] [Step 9] run_claude_code — kill stale mcp_synth, spawn Claude Code");
     claude::kill_existing_mcp_synth();
     eprintln!("[DEBUG] Launching Claude Code...");
-    let output_path = project_dir.join(format!("{}_{}.jsonl", endpoint.model_name, job_id_str));
-    let child = claude::spawn_claude(project_dir, prompt, system_prompt, &output_path, endpoint, ctx_size)?;
+    let mut output_name = format!("{}_{}.jsonl", endpoint.model_name, job_id_str);
+    if endpoint.url != "http://127.0.0.1:8080" {
+        output_name = format!("{}_api_{}.jsonl", endpoint.model_name, job_id_str);
+    }
+    let output_path = project_dir.join(output_name);
+    let child = claude::spawn_claude(
+        project_dir,
+        prompt,
+        system_prompt,
+        &output_path,
+        endpoint,
+        ctx_size,
+    )?;
     Ok((child, output_path))
 }
 
@@ -297,9 +308,7 @@ fn persist_usage_to_redis(redis_url: &str, output_path: &Path, project_name: &st
         Ok(usage) => {
             eprintln!(
                 "[DEBUG] Usage parsed: {} in / {} out / ${:.4}",
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.cost_usd,
+                usage.input_tokens, usage.output_tokens, usage.cost_usd,
             );
             match redis::Client::open(redis_url).and_then(|c| c.get_connection()) {
                 Ok(mut usage_conn) => {
@@ -415,11 +424,7 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("[job:{}] Starting synthesis", job_id_str);
 
         // Run job preflight checks before allocating cluster resources.
-        health::run_job_preflight_checks(
-            &args.project_root,
-            &job,
-            args.git_ssh_key.as_deref(),
-        )?;
+        health::run_job_preflight_checks(&args.project_root, &job, args.git_ssh_key.as_deref())?;
 
         // ------------------------------------------------------------------
         // Phase 2 — Acquire model endpoint (Step 4-6)
@@ -554,9 +559,7 @@ pub fn run(args: Args) -> Result<()> {
             ExecutionMode::Api => {
                 // No Slurm job to monitor — just wait for Claude to finish.
                 eprintln!("[DEBUG] API mode: waiting for Claude Code to finish (no Slurm monitor)");
-                claude_child
-                    .wait()
-                    .context("Claude Code process error")?
+                claude_child.wait().context("Claude Code process error")?
             }
         };
         with_cleanup(|s| s.claude_child_pid = None);
