@@ -191,6 +191,11 @@ fn test_outliers_above() {
             test_run_id: i as u64 + 1,
             trial_id: (i as u64 + 1) * 10,
             gas: data[i] as u64,
+            synth_time_seconds: None,
+            model_name: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         })
         .collect();
 
@@ -215,6 +220,11 @@ fn test_outliers_below() {
             test_run_id: i as u64 + 1,
             trial_id: (i as u64 + 1) * 10,
             gas: f64::max(data[i], 0.0) as u64,
+            synth_time_seconds: None,
+            model_name: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         })
         .collect();
 
@@ -237,6 +247,11 @@ fn test_no_outliers() {
             test_run_id: i as u64 + 1,
             trial_id: (i as u64 + 1) * 10,
             gas: data[i] as u64,
+            synth_time_seconds: None,
+            model_name: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         })
         .collect();
 
@@ -269,6 +284,11 @@ fn test_compute_statistics_integration() {
             test_run_id: i,
             trial_id: i * 10,
             gas: (i as u64) * 1000, // 1000, 2000, 3000, 4000, 5000
+            synth_time_seconds: None,
+            model_name: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
         });
     }
 

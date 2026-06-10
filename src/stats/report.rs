@@ -42,6 +42,11 @@ fn generate_analysis_json(
         test_run_id: u64,
         trial_id: u64,
         gas: u64,
+        synth_time_seconds: Option<f64>,
+        model_name: Option<String>,
+        cost_usd: Option<f64>,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
     }
 
     #[derive(Serialize)]
@@ -80,6 +85,11 @@ fn generate_analysis_json(
                     test_run_id: o.test_run_id,
                     trial_id: o.trial_id,
                     gas: o.gas,
+                    synth_time_seconds: o.synth_time_seconds,
+                    model_name: o.model_name.clone(),
+                    cost_usd: o.cost_usd,
+                    input_tokens: o.input_tokens,
+                    output_tokens: o.output_tokens,
                 })
                 .collect();
 
@@ -178,15 +188,32 @@ fn generate_csv(groups: &[ExperimentGroup], output_dir: &std::path::Path) -> Res
     let mut file =
         std::fs::File::create(&path).with_context(|| format!("failed to create {path:?}"))?;
 
-    writeln!(file, "group,test_run_id,trial_id,gas")
-        .context("failed to write CSV header")?;
+    writeln!(
+        file,
+        "group,test_run_id,trial_id,gas,synth_time_seconds,model_name,cost_usd,input_tokens,output_tokens"
+    )
+    .context("failed to write CSV header")?;
 
     for group in groups {
         for obs in &group.observations {
+            let synth_sec = match obs.synth_time_seconds {
+                Some(s) => format!("{s}"),
+                None => "N.A.".to_string(),
+            };
+            let model = obs.model_name.as_deref().unwrap_or("");
+            let cost = obs
+                .cost_usd
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
+            let inp = obs
+                .input_tokens
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
+            let out = obs
+                .output_tokens
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
             writeln!(
                 file,
-                "{},{},{},{}",
-                group.label, obs.test_run_id, obs.trial_id, obs.gas
+                "{},{},{},{},{synth_sec},{model},{cost},{inp},{out}",
+                group.label, obs.test_run_id, obs.trial_id, obs.gas,
             )
             .context("failed to write CSV row")?;
         }

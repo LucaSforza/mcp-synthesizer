@@ -4,6 +4,18 @@ pub struct GasObservation {
     pub test_run_id: u64,
     pub trial_id: u64,
     pub gas: u64,
+    /// Wall-clock duration (in seconds) between iteration 1 and iteration 2
+    /// for this test run. `None` when fewer than 2 iterations are available or
+    /// timestamps are missing.
+    pub synth_time_seconds: Option<f64>,
+    /// Name of the LLM model used for this synthesis (from test_run hash).
+    pub model_name: Option<String>,
+    /// Synthesis cost in USD (from test_run hash field cost_of_synthesis_USD).
+    pub cost_usd: Option<f64>,
+    /// Total input tokens consumed (from test_run hash field totalInputTokens).
+    pub input_tokens: Option<u64>,
+    /// Total output tokens generated (from test_run hash field totalOutputTokens).
+    pub output_tokens: Option<u64>,
 }
 
 /// An experiment group: a set of test runs identified by label + range.
