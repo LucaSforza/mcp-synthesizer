@@ -22,8 +22,8 @@ Outputs (in <output_dir>):
     gas_ecdf.svg         Empirical CDF for direct group comparison
     gas_vs_tokens.svg    Gas vs total tokens with knee point
     gas_vs_cost.svg      Gas vs synthesis cost with knee point
-    gas_cost_pareto.svg  Pareto frontier for gas-cost trade-off
-    gas_tokens_pareto.svg  Pareto frontier for gas-token trade-off
+    gas_cost_pareto.svg    Pareto frontier (colorblind-friendly, shape+color)
+    gas_tokens_pareto.svg  Token-based Pareto frontier (colorblind-friendly)
 """
 
 import json
@@ -260,85 +260,92 @@ def plot_gas_vs_cost(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
     return path
 
 
-def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
-    """Scatter plot with Pareto frontier overlaid."""
+def _pareto_plot(
+    analysis: dict, df: pd.DataFrame, output_dir: str,
+    frontier_key: str, x_col: str, x_label: str, filename: str, title: str,
+) -> str:
+    """Shared Pareto plot — dominated points as circles, frontier as diamonds + line.
+
+    Parameters
+    ----------
+    frontier_key : "cost" or "tokens" — selects which frontier in analysis.json.
+    x_col : DataFrame column name for the x-axis values.
+    """
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    plot_df = df[df["cost_of_synthesis_usd"] > 0].copy()
+    # Only observations with data for this metric.
+    plot_df = df[df[x_col] > 0].copy()
 
-    for group in sorted(plot_df["group"].unique()):
-        subset = plot_df[plot_df["group"] == group]
+    # Build set of (test_run_id, trial_id) for frontier points.
+    pareto = analysis.get("pareto_frontier", {}).get(frontier_key, [])
+    frontier_ids = {(p["test_run_id"], p["trial_id"]) for p in pareto}
+    plot_df["is_frontier"] = plot_df.apply(
+        lambda r: (r["test_run_id"], r["trial_id"]) in frontier_ids, axis=1,
+    )
+
+    # Dominated points — circular, group-colored.
+    dominated = plot_df[~plot_df["is_frontier"]]
+    for group in sorted(dominated["group"].unique()):
+        subset = dominated[dominated["group"] == group]
         ax.scatter(
-            subset["cost_of_synthesis_usd"], subset["gas"],
-            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            subset[x_col], subset["gas"],
+            marker="o", label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
             edgecolors="black", linewidth=0.5,
         )
 
-    # Pareto frontier from precomputed data.
-    pareto = analysis.get("pareto_frontier", {}).get("cost", [])
+    # Frontier points — diamond, highlighted.
+    frontier_df = plot_df[plot_df["is_frontier"]]
+    if not frontier_df.empty:
+        ax.scatter(
+            frontier_df[x_col], frontier_df["gas"],
+            marker="D", s=120, zorder=6,
+            color="red", edgecolors="darkred", linewidth=1,
+            label="Pareto-optimal",
+        )
+
+    # Frontier connecting line.
     if pareto:
-        px = [p["cost_of_synthesis_usd"] for p in pareto]
+        px = [p[x_col] for p in pareto]
         py = [p["gas"] for p in pareto]
         ax.plot(
             px, py,
-            color="red", linewidth=2.5, linestyle="--",
-            label=f"Pareto Frontier ({len(pareto)} pts)",
-        )
-        ax.scatter(
-            px, py,
-            color="red", s=80, zorder=5, edgecolors="darkred",
-            linewidth=1,
+            color="red", linewidth=3.0, linestyle="--",
+            label=f"Pareto Frontier ({len(pareto)} obs)",
         )
 
-    ax.set_xlabel("Synthesis Cost (USD)")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("Gas")
-    ax.set_title("Gas-Cost Pareto Frontier", fontsize=16, fontweight="bold")
-    ax.legend(title="Group")
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.legend(title="Group", loc="best")
 
-    path = os.path.join(output_dir, "gas_cost_pareto.svg")
+    path = os.path.join(output_dir, filename)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return path
+
+
+def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot with cost-based Pareto frontier — colorblind-friendly."""
+    return _pareto_plot(
+        analysis, df, output_dir,
+        frontier_key="cost",
+        x_col="cost_of_synthesis_usd",
+        x_label="Synthesis Cost (USD)",
+        filename="gas_cost_pareto.svg",
+        title="Gas-Cost Pareto Frontier",
+    )
 
 
 def plot_gas_tokens_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
-    """Scatter plot with token-based Pareto frontier overlaid."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    plot_df = df[df["total_tokens"] > 0].copy()
-
-    for group in sorted(plot_df["group"].unique()):
-        subset = plot_df[plot_df["group"] == group]
-        ax.scatter(
-            subset["total_tokens"], subset["gas"],
-            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
-            edgecolors="black", linewidth=0.5,
-        )
-
-    pareto = analysis.get("pareto_frontier", {}).get("tokens", [])
-    if pareto:
-        px = [p["total_tokens"] for p in pareto]
-        py = [p["gas"] for p in pareto]
-        ax.plot(
-            px, py,
-            color="red", linewidth=2.5, linestyle="--",
-            label=f"Pareto Frontier ({len(pareto)} pts)",
-        )
-        ax.scatter(
-            px, py,
-            color="red", s=80, zorder=5, edgecolors="darkred",
-            linewidth=1,
-        )
-
-    ax.set_xlabel("Total Tokens (Input + Output)")
-    ax.set_ylabel("Gas")
-    ax.set_title("Gas-Tokens Pareto Frontier", fontsize=16, fontweight="bold")
-    ax.legend(title="Group")
-
-    path = os.path.join(output_dir, "gas_tokens_pareto.svg")
-    fig.savefig(path, bbox_inches="tight")
-    plt.close(fig)
-    return path
+    """Scatter plot with token-based Pareto frontier — colorblind-friendly."""
+    return _pareto_plot(
+        analysis, df, output_dir,
+        frontier_key="tokens",
+        x_col="total_tokens",
+        x_label="Total Tokens (Input + Output)",
+        filename="gas_tokens_pareto.svg",
+        title="Gas-Tokens Pareto Frontier",
+    )
 
 
 # ---------------------------------------------------------------------------
