@@ -20,6 +20,9 @@ Outputs (in <output_dir>):
     gas_scatter.svg      Scatter plot colored by group
     gas_histogram.svg    Faceted histogram, one subplot per group
     gas_ecdf.svg         Empirical CDF for direct group comparison
+    gas_vs_tokens.svg    Gas vs total tokens with knee point
+    gas_vs_cost.svg      Gas vs synthesis cost with knee point
+    gas_cost_pareto.svg  Pareto frontier for gas-cost trade-off
 """
 
 import json
@@ -57,7 +60,7 @@ def load_analysis(path: str) -> dict:
 
 
 def build_dataframe(analysis: dict) -> pd.DataFrame:
-    """Flatten groups into a DataFrame with columns: group, test_run_id, trial_id, gas."""
+    """Flatten groups into a DataFrame with columns for gas, tokens, cost, and metadata."""
     rows = []
     for group in analysis["groups"]:
         for obs in group["observations"]:
@@ -66,6 +69,10 @@ def build_dataframe(analysis: dict) -> pd.DataFrame:
                 "test_run_id": obs["test_run_id"],
                 "trial_id": obs["trial_id"],
                 "gas": obs["gas"],
+                "total_tokens": obs.get("total_tokens", 0),
+                "cost_of_synthesis_usd": obs.get("cost_of_synthesis_usd", 0.0),
+                "model_name": obs.get("model_name", ""),
+                "project_id": obs.get("project_id", 0),
             })
     return pd.DataFrame(rows)
 
@@ -182,6 +189,118 @@ def plot_ecdf(df: pd.DataFrame, output_dir: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# New plots: cost / token analysis
+# ---------------------------------------------------------------------------
+
+def plot_gas_vs_tokens(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot of gas vs total tokens with knee point highlighted."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    plot_df = df[df["total_tokens"] > 0].copy()
+
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
+        ax.scatter(
+            subset["total_tokens"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
+        )
+
+    # Knee point from precomputed analysis.
+    knee = analysis.get("knee_analysis", {}).get("gas_vs_tokens")
+    if knee:
+        ax.scatter(
+            knee["knee_x"], knee["knee_y"],
+            color="red", s=200, marker="D", zorder=10,
+            label=f"Knee ({knee['knee_x']:.0f}, {knee['knee_y']:.0f})",
+        )
+
+    ax.set_xlabel("Total Tokens (Input + Output)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas vs Total Tokens", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
+
+    path = os.path.join(output_dir, "gas_vs_tokens.svg")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_gas_vs_cost(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot of gas vs synthesis cost with knee point highlighted."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    plot_df = df[df["cost_of_synthesis_usd"] > 0].copy()
+
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
+        ax.scatter(
+            subset["cost_of_synthesis_usd"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
+        )
+
+    knee = analysis.get("knee_analysis", {}).get("gas_vs_cost")
+    if knee:
+        ax.scatter(
+            knee["knee_x"], knee["knee_y"],
+            color="red", s=200, marker="D", zorder=10,
+            label=f"Knee (${knee['knee_x']:.4f}, {knee['knee_y']:.0f})",
+        )
+
+    ax.set_xlabel("Synthesis Cost (USD)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas vs Synthesis Cost", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
+
+    path = os.path.join(output_dir, "gas_vs_cost.svg")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot with Pareto frontier overlaid."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    plot_df = df[df["cost_of_synthesis_usd"] > 0].copy()
+
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
+        ax.scatter(
+            subset["cost_of_synthesis_usd"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
+        )
+
+    # Pareto frontier from precomputed data.
+    pareto = analysis.get("pareto_frontier", {}).get("observations", [])
+    if pareto:
+        px = [p["cost_of_synthesis_usd"] for p in pareto]
+        py = [p["gas"] for p in pareto]
+        ax.plot(
+            px, py,
+            color="red", linewidth=2.5, linestyle="--",
+            label=f"Pareto Frontier ({len(pareto)} pts)",
+        )
+        ax.scatter(
+            px, py,
+            color="red", s=80, zorder=5, edgecolors="darkred",
+            linewidth=1,
+        )
+
+    ax.set_xlabel("Synthesis Cost (USD)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas-Cost Pareto Frontier", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
+
+    path = os.path.join(output_dir, "gas_cost_pareto.svg")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -207,6 +326,9 @@ def main() -> None:
         plot_scatter(df, output_dir),
         plot_histogram(df, output_dir),
         plot_ecdf(df, output_dir),
+        plot_gas_vs_tokens(analysis, df, output_dir),
+        plot_gas_vs_cost(analysis, df, output_dir),
+        plot_gas_cost_pareto(analysis, df, output_dir),
     ]
 
     for path in paths:

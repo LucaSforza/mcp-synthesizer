@@ -2,8 +2,8 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-use crate::stats::statistics::compute_statistics;
-use crate::stats::types::{ExperimentGroup, GroupStatistics};
+use crate::stats::statistics::{compute_statistics, compute_pareto_frontier, detect_knee};
+use crate::stats::types::{ExperimentGroup, GasObservation, GroupStatistics};
 
 /// Generate all report outputs: analysis.json, summary.json, CSV, and Markdown.
 pub fn generate_all_reports(
@@ -42,6 +42,11 @@ fn generate_analysis_json(
         test_run_id: u64,
         trial_id: u64,
         gas: u64,
+        total_tokens: u64,
+        cost_of_synthesis_usd: f64,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        model_name: String,
+        project_id: u64,
     }
 
     #[derive(Serialize)]
@@ -80,6 +85,10 @@ fn generate_analysis_json(
                     test_run_id: o.test_run_id,
                     trial_id: o.trial_id,
                     gas: o.gas,
+                    total_tokens: o.total_tokens,
+                    cost_of_synthesis_usd: o.cost_of_synthesis_usd,
+                    model_name: o.model_name.clone(),
+                    project_id: o.project_id,
                 })
                 .collect();
 
@@ -115,8 +124,83 @@ fn generate_analysis_json(
         })
         .collect();
 
-    let json = serde_json::to_string_pretty(&serde_json::json!({ "groups": groups_out }))
-        .context("failed to serialize analysis JSON")?;
+    // ── Knee analysis and Pareto frontier (global, across all groups) ──
+
+    #[derive(Serialize)]
+    struct KneePoint {
+        knee_x: f64,
+        knee_y: f64,
+        observations_used: usize,
+    }
+
+    #[derive(Serialize)]
+    struct Pareobs {
+        test_run_id: u64,
+        trial_id: u64,
+        gas: u64,
+        total_tokens: u64,
+        cost_of_synthesis_usd: f64,
+        model_name: String,
+        project_id: u64,
+    }
+
+    let all_obs: Vec<&GasObservation> = groups.iter().flat_map(|g| g.observations.iter()).collect();
+    let analyzable: Vec<GasObservation> = all_obs
+        .into_iter()
+        .filter(|o| o.total_tokens > 0 || o.cost_of_synthesis_usd > 0.0)
+        .cloned()
+        .collect();
+
+    let token_knee = if analyzable.len() >= 3 {
+        let x: Vec<f64> = analyzable.iter().map(|o| o.total_tokens as f64).collect();
+        let y: Vec<f64> = analyzable.iter().map(|o| o.gas as f64).collect();
+        detect_knee(&x, &y)
+    } else {
+        None
+    };
+
+    let cost_knee = if analyzable.len() >= 3 {
+        let x: Vec<f64> = analyzable.iter().map(|o| o.cost_of_synthesis_usd).collect();
+        let y: Vec<f64> = analyzable.iter().map(|o| o.gas as f64).collect();
+        detect_knee(&x, &y)
+    } else {
+        None
+    };
+
+    let pareto = compute_pareto_frontier(&analyzable);
+
+    let pareto_observations: Vec<Pareobs> = pareto
+        .iter()
+        .map(|o| Pareobs {
+            test_run_id: o.test_run_id,
+            trial_id: o.trial_id,
+            gas: o.gas,
+            total_tokens: o.total_tokens,
+            cost_of_synthesis_usd: o.cost_of_synthesis_usd,
+            model_name: o.model_name.clone(),
+            project_id: o.project_id,
+        })
+        .collect();
+
+    let json = serde_json::to_string_pretty(&serde_json::json!({
+        "groups": groups_out,
+        "knee_analysis": {
+            "gas_vs_tokens": token_knee.map(|(kx, ky)| KneePoint {
+                knee_x: kx,
+                knee_y: ky,
+                observations_used: analyzable.len(),
+            }),
+            "gas_vs_cost": cost_knee.map(|(kx, ky)| KneePoint {
+                knee_x: kx,
+                knee_y: ky,
+                observations_used: analyzable.len(),
+            }),
+        },
+        "pareto_frontier": {
+            "observations": pareto_observations,
+        },
+    }))
+    .context("failed to serialize analysis JSON")?;
 
     std::fs::write(&path, &json).with_context(|| format!("failed to write {path:?}"))?;
     eprintln!("[DEBUG] Analysis JSON saved to {}", path.display());
@@ -178,15 +262,22 @@ fn generate_csv(groups: &[ExperimentGroup], output_dir: &std::path::Path) -> Res
     let mut file =
         std::fs::File::create(&path).with_context(|| format!("failed to create {path:?}"))?;
 
-    writeln!(file, "group,test_run_id,trial_id,gas")
+    writeln!(file, "group,test_run_id,trial_id,gas,total_tokens,cost_of_synthesis_usd,model_name,project_id")
         .context("failed to write CSV header")?;
 
     for group in groups {
         for obs in &group.observations {
             writeln!(
                 file,
-                "{},{},{},{}",
-                group.label, obs.test_run_id, obs.trial_id, obs.gas
+                "{},{},{},{},{},{},{},{}",
+                group.label,
+                obs.test_run_id,
+                obs.trial_id,
+                obs.gas,
+                obs.total_tokens,
+                obs.cost_of_synthesis_usd,
+                obs.model_name,
+                obs.project_id,
             )
             .context("failed to write CSV row")?;
         }

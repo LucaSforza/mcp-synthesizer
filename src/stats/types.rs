@@ -4,6 +4,29 @@ pub struct GasObservation {
     pub test_run_id: u64,
     pub trial_id: u64,
     pub gas: u64,
+    /// Combined input+output tokens from the test_run hash (0 if unavailable).
+    pub total_tokens: u64,
+    /// Synthesis cost in USD from the test_run hash (0.0 if unavailable).
+    pub cost_of_synthesis_usd: f64,
+    /// Model name from the test_run hash (empty if unavailable).
+    pub model_name: String,
+    /// Project ID from the test_run hash (0 if unavailable).
+    pub project_id: u64,
+}
+
+impl GasObservation {
+    /// Create a new observation with optional token/cost fields defaulted to zero.
+    pub fn new(test_run_id: u64, trial_id: u64, gas: u64) -> Self {
+        Self {
+            test_run_id,
+            trial_id,
+            gas,
+            total_tokens: 0,
+            cost_of_synthesis_usd: 0.0,
+            model_name: String::new(),
+            project_id: 0,
+        }
+    }
 }
 
 /// An experiment group: a set of test runs identified by label + range.

@@ -25,19 +25,30 @@ Synthesis job queue. Written by `populate_queue`, consumed by `queue_controller`
 | Field | Value |
 |---|---|
 | Type | Sorted Set |
-| Member format | `{model_name}:{job_id}` (e.g. `qwen3-solidity-27B-Q6_K.gguf:1`) |
+| Member format | `{model_name}:{job_id}` (cluster, e.g. `qwen3-solidity-27B-Q6_K.gguf:1`) or `api:{job_id}` (API, e.g. `api:1`) |
 | Score | Priority (higher = higher priority) |
 | Written by | `populate_queue` (ZADD) |
 | Read by | `queue_controller` (ZREVRANGE for peek, ZREM on success) |
 
-Example:
+Example (cluster mode):
 
 ```
 ZADD cluster_runs 100 qwen3-solidity-27B-Q6_K.gguf:1
 ZADD cluster_runs  50 qwen3-solidity-27B-Q6_K.gguf:2
 ```
 
-### `{model_name}:{job_id}` (Job Metadata Hash)
+Example (API mode):
+
+```
+ZADD cluster_runs 1 api:1
+ZADD cluster_runs 2 api:2
+```
+
+### `{model_name}:{job_id}` or `api:{job_id}` (Job Metadata Hash)
+
+Two key formats depending on execution mode:
+
+#### Cluster mode: `{model_name}:{job_id}`
 
 | Field | Value |
 |---|---|
@@ -65,6 +76,38 @@ HSET qwen3-solidity-27B-Q6_K.gguf:1 \
   prompt "Write a Solidity contract..."
 ```
 
+#### API mode: `api:{job_id}`
+
+| Field | Value |
+|---|---|
+| Type | Hash |
+| Key example | `api:1` |
+| Written by | `populate_queue` (HSET) |
+| Read by | `queue_controller` (HGETALL) |
+
+Fields:
+
+| Hash field | Required | Description |
+|---|---|---|
+| `execution_mode` | yes | `"api"` — signals queue_controller to skip Slurm |
+| `api_url` | yes | External HTTP endpoint URL (e.g. `https://api.deepseek.com/anthropic`) |
+| `model` | yes | Model name for `ANTHROPIC_MODEL` (e.g. `deepseek-v4-flash`) |
+| `seed` | yes | llama.cpp random seed (decimal string) |
+| `project` | yes | Synthesis project name, maps to directory under `--project-root` |
+| `prompt` | yes | Synthesis prompt text for Claude Code |
+
+Example:
+
+```
+HSET api:1 \
+  execution_mode "api" \
+  api_url "https://api.deepseek.com/anthropic" \
+  model "deepseek-v4-flash" \
+  seed "6359224793118599887" \
+  project "test2" \
+  prompt "Write a Solidity contract..."
+```
+
 ---
 
 ## Projects
@@ -88,18 +131,27 @@ project:name:test2 -> "1"
 
 ## Test Runs
 
-Written and read by `mcp_synth`. Not accessed by `queue_controller` or `populate_queue`.
+Written and read by `mcp_synth`. Written by `queue_controller` (usage fields). Not accessed by `populate_queue`.
 
 | Key | Type | Fields / Values | Written by | Read by |
 |---|---|---|---|---|
 | `test_run:ids` | String (INCR) | auto-increment counter | `mcp_synth` | `mcp_synth` |
-| `test_run:{id}` | Hash | `project_id`, `compilation_passed`, `compilation_not_passed`, `model_name` (optional), `created_at` | `mcp_synth` | `mcp_synth` |
+| `test_run:{id}` | Hash | `project_id`, `compilation_passed`, `compilation_not_passed`, `model_name` (optional), `created_at`, plus usage fields (see below) | `mcp_synth`, `queue_controller` | `mcp_synth` |
 | `test_run:by_project:{pid}` | Set | member = `{test_run_id}` | `mcp_synth` | `mcp_synth` |
+
+`test_run:{id}` hash usage fields (written by `queue_controller` Step 13 — `synthesis_usage::write_usage_to_test_run`):
+
+| Hash field | Required | Type in Redis | Description |
+|---|---|---|---|
+| `totalInputTokens` | no | integer string | Total input tokens from Claude Code session |
+| `totalOutputTokens` | no | integer string | Total output tokens from Claude Code session |
+| `cost_of_synthesis_USD` | no | decimal string | Total cost in USD for the synthesis session |
 
 Example:
 
 ```
-test_run:1 -> { project_id: 1, compilation_passed: 3, compilation_not_passed: 0, created_at: "..." }
+test_run:1 -> { project_id: 1, compilation_passed: 3, compilation_not_passed: 0, created_at: "2026-05-29 11:20:04" }
+test_run:122 -> { project_id: 1, compilation_passed: 2, compilation_not_passed: 0, created_at: "2026-06-10T14:39:17...", model_name: "deepseek-v4-flash", totalInputTokens: "52670", totalOutputTokens: "16749", cost_of_synthesis_USD: "0.956891" }
 test_run:by_project:1 -> ["1", "2", "3"]
 ```
 
