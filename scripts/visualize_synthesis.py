@@ -49,6 +49,9 @@ MEAN_STD_CAPTHICK = 1.5
 SCATTER_ALPHA = 0.8
 SCATTER_S = 50
 
+# Shape cycle so groups distinguishable without color (colorblind-friendly).
+GROUP_MARKERS = ["o", "s", "^", "D", "v", "p", "*", "h"]
+
 
 # ---------------------------------------------------------------------------
 # Data loading
@@ -264,43 +267,52 @@ def _pareto_plot(
     analysis: dict, df: pd.DataFrame, output_dir: str,
     frontier_key: str, x_col: str, x_label: str, filename: str, title: str,
 ) -> str:
-    """Shared Pareto plot — dominated points as circles, frontier as diamonds + line.
+    """Shared Pareto plot — each group gets a distinct marker shape.
 
-    Parameters
-    ----------
-    frontier_key : "cost" or "tokens" — selects which frontier in analysis.json.
-    x_col : DataFrame column name for the x-axis values.
+    Dominated points use group shape at normal size.  Frontier points use
+    the same group shape but enlarged with a red edge so their status is
+    visible even without color.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    # Only observations with data for this metric.
     plot_df = df[df[x_col] > 0].copy()
+    groups_sorted = sorted(plot_df["group"].unique())
 
-    # Build set of (test_run_id, trial_id) for frontier points.
+    # Map each group to a distinct marker shape.
+    marker_map = {g: GROUP_MARKERS[i % len(GROUP_MARKERS)] for i, g in enumerate(groups_sorted)}
+
+    # Frontier ID set from analysis.json.
     pareto = analysis.get("pareto_frontier", {}).get(frontier_key, [])
     frontier_ids = {(p["test_run_id"], p["trial_id"]) for p in pareto}
     plot_df["is_frontier"] = plot_df.apply(
         lambda r: (r["test_run_id"], r["trial_id"]) in frontier_ids, axis=1,
     )
 
-    # Dominated points — circular, group-colored.
-    dominated = plot_df[~plot_df["is_frontier"]]
-    for group in sorted(dominated["group"].unique()):
-        subset = dominated[dominated["group"] == group]
+    # Plot each group — dominated points at normal size.
+    for group in groups_sorted:
+        subset = plot_df[(plot_df["group"] == group) & (~plot_df["is_frontier"])]
+        if subset.empty:
+            continue
         ax.scatter(
             subset[x_col], subset["gas"],
-            marker="o", label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            marker=marker_map[group], label=group,
+            s=SCATTER_S, alpha=SCATTER_ALPHA,
             edgecolors="black", linewidth=0.5,
         )
 
-    # Frontier points — diamond, highlighted.
+    # Plot frontier points — same group shape, enlarged, red edge.
     frontier_df = plot_df[plot_df["is_frontier"]]
-    if not frontier_df.empty:
+    for group in frontier_df["group"].unique():
+        subset = frontier_df[frontier_df["group"] == group]
+        if subset.empty:
+            continue
         ax.scatter(
-            frontier_df[x_col], frontier_df["gas"],
-            marker="D", s=120, zorder=6,
-            color="red", edgecolors="darkred", linewidth=1,
-            label="Pareto-optimal",
+            subset[x_col], subset["gas"],
+            marker=marker_map[group],
+            s=140, zorder=6,
+            edgecolors="red", linewidth=2.5,
+            facecolors="none",
+            label=f"{group} (Pareto)",
         )
 
     # Frontier connecting line.
@@ -316,7 +328,7 @@ def _pareto_plot(
     ax.set_xlabel(x_label)
     ax.set_ylabel("Gas")
     ax.set_title(title, fontsize=16, fontweight="bold")
-    ax.legend(title="Group", loc="best")
+    ax.legend(loc="best")
 
     path = os.path.join(output_dir, filename)
     fig.savefig(path, bbox_inches="tight")
