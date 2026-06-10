@@ -1,56 +1,96 @@
 {
   "groups": [
     {
-      "label": "qwenSol",
+      "label": "qwen3.6Sol",
       "observations": [
         {
+          "cost_of_synthesis_usd": 0.48176449999999993,
           "gas": 424743,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 82,
+          "total_tokens": 44353,
           "trial_id": 182
         },
         {
+          "cost_of_synthesis_usd": 0.607647,
           "gas": 388984,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 83,
+          "total_tokens": 49195,
           "trial_id": 184
         },
         {
+          "cost_of_synthesis_usd": 0.20447550000000003,
           "gas": 840032,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 84,
+          "total_tokens": 20073,
           "trial_id": 187
         },
         {
+          "cost_of_synthesis_usd": 1.5130715,
           "gas": 246800,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 85,
+          "total_tokens": 78482,
           "trial_id": 191
         },
         {
+          "cost_of_synthesis_usd": 0.8490044999999998,
           "gas": 509438,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 86,
+          "total_tokens": 56099,
           "trial_id": 193
         },
         {
+          "cost_of_synthesis_usd": 0.6645685,
           "gas": 785239,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 87,
+          "total_tokens": 51540,
           "trial_id": 196
         },
         {
+          "cost_of_synthesis_usd": 1.3345410000000002,
           "gas": 1071436,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 88,
+          "total_tokens": 73689,
           "trial_id": 200
         },
         {
+          "cost_of_synthesis_usd": 0.8590485000000001,
           "gas": 996058,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 89,
+          "total_tokens": 58525,
           "trial_id": 202
         },
         {
+          "cost_of_synthesis_usd": 0.7533725,
           "gas": 809855,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 90,
+          "total_tokens": 57372,
           "trial_id": 203
         },
         {
+          "cost_of_synthesis_usd": 0.292915,
           "gas": 437975,
+          "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+          "project_id": 1,
           "test_run_id": 91,
+          "total_tokens": 26883,
           "trial_id": 205
         }
       ],
@@ -69,6 +109,345 @@
         "std_dev": 268972.34877288033,
         "variance": 72346124404.4
       }
+    },
+    {
+      "label": "qwen3.6Simple",
+      "observations": [
+        {
+          "cost_of_synthesis_usd": 0.301392,
+          "gas": 411401,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 95,
+          "total_tokens": 26094,
+          "trial_id": 211
+        },
+        {
+          "cost_of_synthesis_usd": 0.282679,
+          "gas": 522255,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 96,
+          "total_tokens": 25526,
+          "trial_id": 213
+        },
+        {
+          "cost_of_synthesis_usd": 0.324101,
+          "gas": 416057,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 97,
+          "total_tokens": 26718,
+          "trial_id": 216
+        },
+        {
+          "cost_of_synthesis_usd": 0.206378,
+          "gas": 1047231,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 98,
+          "total_tokens": 22622,
+          "trial_id": 219
+        },
+        {
+          "cost_of_synthesis_usd": 0.29878,
+          "gas": 869391,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 99,
+          "total_tokens": 26232,
+          "trial_id": 222
+        },
+        {
+          "cost_of_synthesis_usd": 0.353688,
+          "gas": 1060495,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 100,
+          "total_tokens": 28221,
+          "trial_id": 225
+        },
+        {
+          "cost_of_synthesis_usd": 0.2163185,
+          "gas": 477252,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 101,
+          "total_tokens": 22673,
+          "trial_id": 227
+        },
+        {
+          "cost_of_synthesis_usd": 0.24777899999999997,
+          "gas": 520598,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 102,
+          "total_tokens": 23625,
+          "trial_id": 229
+        },
+        {
+          "cost_of_synthesis_usd": 1.039729,
+          "gas": 933848,
+          "model_name": "qwen3.6-27B-Q6_K.gguf",
+          "project_id": 1,
+          "test_run_id": 103,
+          "total_tokens": 62138,
+          "trial_id": 232
+        }
+      ],
+      "outliers": [],
+      "range": "95:104",
+      "statistics": {
+        "coefficient_of_variation": 0.3746943783948264,
+        "count": 9,
+        "iqr": 456596.0,
+        "max": 1060495,
+        "mean": 695392.0,
+        "median": 522255.0,
+        "min": 411401,
+        "q1": 477252.0,
+        "q3": 933848.0,
+        "std_dev": 260559.4731807351,
+        "variance": 67891239064.22222
+      }
+    },
+    {
+      "label": "deepseek-flash",
+      "observations": [
+        {
+          "cost_of_synthesis_usd": 0.6969339999999999,
+          "gas": 1082583,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 114,
+          "total_tokens": 59794,
+          "trial_id": 250
+        },
+        {
+          "cost_of_synthesis_usd": 0.714415,
+          "gas": 426010,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 115,
+          "total_tokens": 61603,
+          "trial_id": 252
+        },
+        {
+          "cost_of_synthesis_usd": 1.0524350000000002,
+          "gas": 1006629,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 116,
+          "total_tokens": 67967,
+          "trial_id": 254
+        },
+        {
+          "cost_of_synthesis_usd": 1.2294779999999998,
+          "gas": 944525,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 117,
+          "total_tokens": 78102,
+          "trial_id": 256
+        },
+        {
+          "cost_of_synthesis_usd": 0.715154,
+          "gas": 1027578,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 118,
+          "total_tokens": 56726,
+          "trial_id": 258
+        },
+        {
+          "cost_of_synthesis_usd": 0.7899690000000001,
+          "gas": 428502,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 119,
+          "total_tokens": 55545,
+          "trial_id": 260
+        },
+        {
+          "cost_of_synthesis_usd": 0.831486,
+          "gas": 941869,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 120,
+          "total_tokens": 56926,
+          "trial_id": 262
+        },
+        {
+          "cost_of_synthesis_usd": 0.9615,
+          "gas": 963125,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 121,
+          "total_tokens": 69152,
+          "trial_id": 264
+        },
+        {
+          "cost_of_synthesis_usd": 0.956891,
+          "gas": 1122455,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 122,
+          "total_tokens": 69419,
+          "trial_id": 266
+        },
+        {
+          "cost_of_synthesis_usd": 0.571771,
+          "gas": 1031987,
+          "model_name": "deepseek-v4-flash",
+          "project_id": 1,
+          "test_run_id": 123,
+          "total_tokens": 57963,
+          "trial_id": 268
+        }
+      ],
+      "outliers": [
+        {
+          "gas": 426010,
+          "test_run_id": 115,
+          "trial_id": 252
+        },
+        {
+          "gas": 428502,
+          "test_run_id": 119,
+          "trial_id": 260
+        }
+      ],
+      "range": "114:123",
+      "statistics": {
+        "coefficient_of_variation": 0.26891199160939955,
+        "count": 10,
+        "iqr": 88351.75,
+        "max": 1122455,
+        "mean": 897526.3,
+        "median": 984877.0,
+        "min": 426010,
+        "q1": 942533.0,
+        "q3": 1030884.75,
+        "std_dev": 241355.58485481542,
+        "variance": 58252518340.61
+      }
     }
-  ]
+  ],
+  "knee_analysis": {
+    "gas_vs_cost": {
+      "knee_x": 1.3345410000000002,
+      "knee_y": 1071436.0,
+      "observations_used": 29
+    },
+    "gas_vs_tokens": {
+      "knee_x": 69419.0,
+      "knee_y": 1122455.0,
+      "observations_used": 29
+    }
+  },
+  "pareto_frontier": {
+    "cost": [
+      {
+        "cost_of_synthesis_usd": 0.20447550000000003,
+        "gas": 840032,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 84,
+        "total_tokens": 20073,
+        "trial_id": 187
+      },
+      {
+        "cost_of_synthesis_usd": 0.2163185,
+        "gas": 477252,
+        "model_name": "qwen3.6-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 101,
+        "total_tokens": 22673,
+        "trial_id": 227
+      },
+      {
+        "cost_of_synthesis_usd": 0.292915,
+        "gas": 437975,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 91,
+        "total_tokens": 26883,
+        "trial_id": 205
+      },
+      {
+        "cost_of_synthesis_usd": 0.301392,
+        "gas": 411401,
+        "model_name": "qwen3.6-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 95,
+        "total_tokens": 26094,
+        "trial_id": 211
+      },
+      {
+        "cost_of_synthesis_usd": 0.607647,
+        "gas": 388984,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 83,
+        "total_tokens": 49195,
+        "trial_id": 184
+      },
+      {
+        "cost_of_synthesis_usd": 1.5130715,
+        "gas": 246800,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 85,
+        "total_tokens": 78482,
+        "trial_id": 191
+      }
+    ],
+    "tokens": [
+      {
+        "cost_of_synthesis_usd": 0.20447550000000003,
+        "gas": 840032,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 84,
+        "total_tokens": 20073,
+        "trial_id": 187
+      },
+      {
+        "cost_of_synthesis_usd": 0.2163185,
+        "gas": 477252,
+        "model_name": "qwen3.6-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 101,
+        "total_tokens": 22673,
+        "trial_id": 227
+      },
+      {
+        "cost_of_synthesis_usd": 0.301392,
+        "gas": 411401,
+        "model_name": "qwen3.6-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 95,
+        "total_tokens": 26094,
+        "trial_id": 211
+      },
+      {
+        "cost_of_synthesis_usd": 0.607647,
+        "gas": 388984,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 83,
+        "total_tokens": 49195,
+        "trial_id": 184
+      },
+      {
+        "cost_of_synthesis_usd": 1.5130715,
+        "gas": 246800,
+        "model_name": "qwen3-solidity-27B-Q6_K.gguf",
+        "project_id": 1,
+        "test_run_id": 85,
+        "total_tokens": 78482,
+        "trial_id": 191
+      }
+    ]
+  }
 }
