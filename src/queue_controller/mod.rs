@@ -162,6 +162,7 @@ fn setup_claude_and_git(
     seed: u64,
     iteration: u64,
     fuzz_seed: Option<u64>,
+    redis_url: &str,
 ) -> Result<(Option<PathBuf>, Option<(String, String)>)> {
     eprintln!(
         "[DEBUG] [Step 8+8b] setup_claude_and_git — inject MCP settings, create synthesis git branch"
@@ -176,6 +177,7 @@ fn setup_claude_and_git(
         &project_dir_str,
         project_name,
         fuzz_seed,
+        redis_url,
     )?;
     with_cleanup(|s| {
         s.settings_backup = backup.clone();
@@ -524,7 +526,6 @@ pub fn run(args: Args) -> Result<()> {
                 .as_deref()
                 .context("--api-key is required for API execution mode")?,
         };
-
         let (backup, synthesis_branch) = setup_claude_and_git(
             &project_dir,
             &model_endpoint,
@@ -534,6 +535,7 @@ pub fn run(args: Args) -> Result<()> {
             seed,
             iteration,
             Some(fuzz_seed),
+            &args.redis_url,
         )?;
 
         // ------------------------------------------------------------------

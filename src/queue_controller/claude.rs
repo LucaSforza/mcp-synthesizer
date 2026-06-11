@@ -33,6 +33,7 @@ pub fn setup_claude_settings(
     mcp_cwd: &str,
     mcp_project: &str,
     fuzz_seed: Option<u64>,
+    redis_url: &str,
 ) -> Result<Option<PathBuf>> {
     let claude_dir = project_dir.join(".claude");
     let settings_path = claude_dir.join("settings.local.json");
@@ -57,7 +58,18 @@ pub fn setup_claude_settings(
 
     // Inject mcpServers while preserving all existing settings.
     let seed_str = fuzz_seed.map(|s| s.to_string());
-    let mut synth_args = vec!["--cwd", mcp_cwd, "--project", mcp_project, "--db-type", "redis", "--model-name", model_name];
+    let mut synth_args = vec![
+        "--cwd",
+        mcp_cwd,
+        "--project",
+        mcp_project,
+        "--db-type",
+        "redis",
+        "--model-name",
+        model_name,
+        "--redis-url",
+        redis_url,
+    ];
     if let Some(ref s) = seed_str {
         synth_args.push("--fuzz-seed");
         synth_args.push(s);
@@ -94,7 +106,18 @@ pub fn setup_claude_settings(
     std::fs::write(&settings_path, content)?;
     // Also write standalone MCP config file for --mcp-config flag.
     let seed_str = fuzz_seed.map(|s| s.to_string());
-    let mut mcp_args = vec!["--cwd", mcp_cwd, "--project", mcp_project, "--db-type", "redis", "--model-name", model_name];
+    let mut mcp_args = vec![
+        "--cwd",
+        mcp_cwd,
+        "--project",
+        mcp_project,
+        "--db-type",
+        "redis",
+        "--model-name",
+        model_name,
+        "--redis-url",
+        redis_url,
+    ];
     if let Some(ref s) = seed_str {
         mcp_args.push("--fuzz-seed");
         mcp_args.push(s);
@@ -176,6 +199,8 @@ pub fn spawn_claude(
         "--mcp-config",
         &mcp_config_str,
         "--strict-mcp-config",
+        "--include-hook-events",
+        "--debug",
     ];
     if !system_prompt.is_empty() {
         args.push("--append-system-prompt");
