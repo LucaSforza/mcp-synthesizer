@@ -4,18 +4,29 @@ pub struct GasObservation {
     pub test_run_id: u64,
     pub trial_id: u64,
     pub gas: u64,
-    /// Wall-clock duration (in seconds) between iteration 1 and iteration 2
-    /// for this test run. `None` when fewer than 2 iterations are available or
-    /// timestamps are missing.
-    pub synth_time_seconds: Option<f64>,
-    /// Name of the LLM model used for this synthesis (from test_run hash).
-    pub model_name: Option<String>,
-    /// Synthesis cost in USD (from test_run hash field cost_of_synthesis_USD).
-    pub cost_usd: Option<f64>,
-    /// Total input tokens consumed (from test_run hash field totalInputTokens).
-    pub input_tokens: Option<u64>,
-    /// Total output tokens generated (from test_run hash field totalOutputTokens).
-    pub output_tokens: Option<u64>,
+    /// Combined input+output tokens from the test_run hash (0 if unavailable).
+    pub total_tokens: u64,
+    /// Synthesis cost in USD from the test_run hash (0.0 if unavailable).
+    pub cost_of_synthesis_usd: f64,
+    /// Model name from the test_run hash (empty if unavailable).
+    pub model_name: String,
+    /// Project ID from the test_run hash (0 if unavailable).
+    pub project_id: u64,
+}
+
+impl GasObservation {
+    /// Create a new observation with optional token/cost fields defaulted to zero.
+    pub fn new(test_run_id: u64, trial_id: u64, gas: u64) -> Self {
+        Self {
+            test_run_id,
+            trial_id,
+            gas,
+            total_tokens: 0,
+            cost_of_synthesis_usd: 0.0,
+            model_name: String::new(),
+            project_id: 0,
+        }
+    }
 }
 
 /// An experiment group: a set of test runs identified by label + range.

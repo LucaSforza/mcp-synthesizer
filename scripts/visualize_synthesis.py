@@ -16,15 +16,15 @@ Usage:
     uv run scripts/visualize_synthesis.py results/analysis.json results/
 
 Outputs (in <output_dir>):
-    gas_boxplot.svg         Box + strip plot with mean/std-dev overlay
-    gas_violin.svg          Violin plot for distribution shape
-    gas_scatter.svg         Scatter plot colored by group
-    gas_histogram.svg       Faceted histogram, one subplot per group
-    gas_ecdf.svg            Empirical CDF for direct group comparison
-    gas_elbow.svg           Elbow method (K-means inertia vs k) on tokens-vs-gas
-    cost_vs_gas.svg         Cost vs gas scatter with per-model regression
-    tokens_vs_gas.svg       Total tokens vs gas scatter with per-model regression
-    regression_summary.csv  Per-model regression statistics (optional)
+    gas_boxplot.svg      Box + strip plot with mean/std-dev overlay
+    gas_violin.svg       Violin plot for distribution shape
+    gas_scatter.svg      Scatter plot colored by group
+    gas_histogram.svg    Faceted histogram, one subplot per group
+    gas_ecdf.svg         Empirical CDF for direct group comparison
+    gas_vs_tokens.svg    Gas vs total tokens with knee point
+    gas_vs_cost.svg      Gas vs synthesis cost with knee point
+    gas_cost_pareto.svg    Pareto frontier (colorblind-friendly, shape+color)
+    gas_tokens_pareto.svg  Token-based Pareto frontier (colorblind-friendly)
 """
 
 import csv
@@ -55,14 +55,8 @@ MEAN_STD_CAPTHICK = 1.5
 SCATTER_ALPHA = 0.8
 SCATTER_S = 50
 
-# B&W-safe visual encoding: grayscale palette for up to 5 models, cycling
-GRAYSCALE_PALETTE = ["black", "dimgray", "gray", "darkgray", "silver"]
-
-MARKER_SHAPES = ["o", "s", "^", "D", "P", "*", "v", "<", ">", "p", "h", "X"]
-
-LINE_STYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1)), (0, (3, 1))]
-
-ELBOW_MAX_K = 15
+# Shape cycle so groups distinguishable without color (colorblind-friendly).
+GROUP_MARKERS = ["o", "s", "^", "D", "v", "p", "*", "h"]
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +71,7 @@ def load_analysis(path: str) -> dict:
 
 
 def build_dataframe(analysis: dict) -> pd.DataFrame:
-    """Flatten groups into a DataFrame with all observation fields."""
+    """Flatten groups into a DataFrame with columns for gas, tokens, cost, and metadata."""
     rows = []
     for group in analysis["groups"]:
         for obs in group["observations"]:
@@ -86,20 +80,11 @@ def build_dataframe(analysis: dict) -> pd.DataFrame:
                 "test_run_id": obs["test_run_id"],
                 "trial_id": obs["trial_id"],
                 "gas": obs["gas"],
-                "synth_time_seconds": obs.get("synth_time_seconds"),
-                "model_name": obs.get("model_name"),
-                "cost_usd": obs.get("cost_usd"),
-                "input_tokens": obs.get("input_tokens"),
-                "output_tokens": obs.get("output_tokens"),
-            }
-            # Compute total_tokens when both are available.
-            inp = row["input_tokens"]
-            out = row["output_tokens"]
-            if inp is not None and out is not None:
-                row["total_tokens"] = inp + out
-            else:
-                row["total_tokens"] = None
-            rows.append(row)
+                "total_tokens": obs.get("total_tokens", 0),
+                "cost_of_synthesis_usd": obs.get("cost_of_synthesis_usd", 0.0),
+                "model_name": obs.get("model_name", ""),
+                "project_id": obs.get("project_id", 0),
+            })
     return pd.DataFrame(rows)
 
 
@@ -261,216 +246,170 @@ def plot_ecdf(df: pd.DataFrame, output_dir: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Elbow method: K-means inertia on (total_tokens, gas)
+# New plots: cost / token analysis
 # ---------------------------------------------------------------------------
 
+def plot_gas_vs_tokens(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot of gas vs total tokens with knee point highlighted."""
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-def plot_gas_elbow(df: pd.DataFrame, output_dir: str) -> str:
-    """
-    Elbow method for K-means clustering on the (total_tokens, gas) space.
+    plot_df = df[df["total_tokens"] > 0].copy()
 
-    Plots inertia vs k. Helps determine the optimal number of clusters in the
-    synthesis cost-quality space.
-    """
-    # Drop rows missing either field.
-    valid = df.dropna(subset=["total_tokens", "gas"])
-    if len(valid) < 2:
-        print("[WARNING] Fewer than 2 complete (total_tokens, gas) observations"
-              " — skipping elbow plot")
-        return ""
-
-    X = valid[["total_tokens", "gas"]].values.astype(np.float64)
-    max_k = min(ELBOW_MAX_K, len(X) - 1)
-
-    inertias = []
-    for k in range(1, max_k + 1):
-        km = KMeans(n_clusters=k, n_init=10, random_state=42)
-        km.fit(X)
-        inertias.append(km.inertia_)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ks = list(range(1, max_k + 1))
-    ax.plot(ks, inertias, marker="o", color="black", linestyle="-", linewidth=2)
-
-    # Annotate the "elbow" — point of max curvature (simplified: 2nd diff peak).
-    if max_k >= 3:
-        deltas = np.diff(inertias)
-        delta2 = np.diff(deltas)
-        elbow_k = int(np.argmax(delta2)) + 2  # +2 because double diff shifts by 2
-        ax.axvline(x=elbow_k, color="dimgray", linestyle="--", alpha=0.7)
-        ax.annotate(
-            f"elbow ≈ k={elbow_k}",
-            xy=(elbow_k, inertias[elbow_k - 1]),
-            xytext=(elbow_k + 0.5, inertias[elbow_k - 1] * 1.05),
-            fontsize=11,
-            arrowprops=dict(arrowstyle="->", color="dimgray"),
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
+        ax.scatter(
+            subset["total_tokens"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
         )
 
-    ax.set_title("Elbow Method: Optimal Clusters (total_tokens, gas)",
-                 fontsize=14, fontweight="bold")
-    ax.set_xlabel("Number of clusters (k)")
-    ax.set_ylabel("Inertia (within-cluster sum of squares)")
-    ax.set_xticks(ks)
+    # Knee point from precomputed analysis.
+    knee = analysis.get("knee_analysis", {}).get("gas_vs_tokens")
+    if knee:
+        ax.scatter(
+            knee["knee_x"], knee["knee_y"],
+            color="red", s=200, marker="D", zorder=10,
+            label=f"Knee ({knee['knee_x']:.0f}, {knee['knee_y']:.0f})",
+        )
 
-    path = os.path.join(output_dir, "gas_elbow.svg")
+    ax.set_xlabel("Total Tokens (Input + Output)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas vs Total Tokens", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
+
+    path = os.path.join(output_dir, "gas_vs_tokens.svg")
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
     return path
 
 
-# ---------------------------------------------------------------------------
-# Multi-model correlation plots (B&W-safe)
-# ---------------------------------------------------------------------------
+def plot_gas_vs_cost(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot of gas vs synthesis cost with knee point highlighted."""
+    fig, ax = plt.subplots(figsize=(10, 6))
 
+    plot_df = df[df["cost_of_synthesis_usd"] > 0].copy()
 
-def _build_regression_legend_label(
-    model: str, n: int, slope: float, intercept: float, r2: float
-) -> str:
-    """Build a multi-line legend entry for one model."""
-    return (
-        f"{model}\n"
-        f"  n = {n}\n"
-        f"  y = {slope:.4f}x + {intercept:.1f}\n"
-        f"  R² = {r2:.4f}"
-    )
-
-
-def _plot_regression_scatter(
-    df: pd.DataFrame,
-    x_col: str,
-    y_col: str,
-    xlabel: str,
-    ylabel: str,
-    title: str,
-    filename: str,
-    output_dir: str,
-) -> str:
-    """
-    Generic scatter + per-model regression plot.
-
-    Parameters
-    ----------
-    df : DataFrame — must contain model_name, x_col, y_col
-    x_col, y_col : column names for axes
-    xlabel, ylabel : axis labels
-    title : plot title
-    filename : output file name (e.g. "cost_vs_gas.svg")
-    output_dir : output directory
-    """
-    valid = df.dropna(subset=[x_col, y_col, "model_name"])
-    if valid.empty:
-        print(f"[WARNING] No valid data for {filename} — skipping")
-        return ""
-
-    models = sorted(valid["model_name"].unique())
-    visuals = assign_model_visuals(models)
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    regression_rows = []  # for CSV export
-
-    for model in models:
-        subset = valid[valid["model_name"] == model]
-        x = subset[x_col].values.astype(np.float64)
-        y = subset[y_col].values.astype(np.float64)
-        marker, color, linestyle = visuals[model]
-
-        # Scatter points.
+    for group in sorted(plot_df["group"].unique()):
+        subset = plot_df[plot_df["group"] == group]
         ax.scatter(
-            x, y,
-            marker=marker, color=color, s=SCATTER_S,
-            alpha=SCATTER_ALPHA, edgecolors="black", linewidth=0.5,
-            label=None,  # custom legend below
-            zorder=3,
+            subset["cost_of_synthesis_usd"], subset["gas"],
+            label=group, s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
         )
 
-        # Linear regression.
-        slope, intercept, r2, reg = fit_regression(x, y)
-        n = len(subset)
-        regression_rows.append((model, n, slope, intercept, r2))
+    knee = analysis.get("knee_analysis", {}).get("gas_vs_cost")
+    if knee:
+        ax.scatter(
+            knee["knee_x"], knee["knee_y"],
+            color="red", s=200, marker="D", zorder=10,
+            label=f"Knee (${knee['knee_x']:.4f}, {knee['knee_y']:.0f})",
+        )
 
-        if reg is not None and n >= 2:
-            x_line = np.linspace(x.min(), x.max(), 200)
-            y_line = reg.predict(x_line.reshape(-1, 1))
-            ax.plot(
-                x_line, y_line,
-                color=color, linestyle=linestyle, linewidth=2,
-                label=_build_regression_legend_label(model, n, slope, intercept, r2),
-                zorder=4,
-            )
+    ax.set_xlabel("Synthesis Cost (USD)")
+    ax.set_ylabel("Gas")
+    ax.set_title("Gas vs Synthesis Cost", fontsize=16, fontweight="bold")
+    ax.legend(title="Group")
 
-    ax.set_xlabel(xlabel, fontsize=13)
-    ax.set_ylabel(ylabel, fontsize=13)
-    ax.set_title(title, fontsize=15, fontweight="bold")
+    path = os.path.join(output_dir, "gas_vs_cost.svg")
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    return path
 
-    # Legend outside plot to avoid crowding.
-    ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1),
-        frameon=True,
-        fontsize=9,
-        title="Model Regression",
+
+def _pareto_plot(
+    analysis: dict, df: pd.DataFrame, output_dir: str,
+    frontier_key: str, x_col: str, x_label: str, filename: str, title: str,
+) -> str:
+    """Shared Pareto plot — each group gets a distinct marker shape.
+
+    Dominated points use group shape at normal size.  Frontier points use
+    the same group shape but enlarged with a red edge so their status is
+    visible even without color.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    plot_df = df[df[x_col] > 0].copy()
+    groups_sorted = sorted(plot_df["group"].unique())
+
+    # Map each group to a distinct marker shape.
+    marker_map = {g: GROUP_MARKERS[i % len(GROUP_MARKERS)] for i, g in enumerate(groups_sorted)}
+
+    # Frontier ID set from analysis.json.
+    pareto = analysis.get("pareto_frontier", {}).get(frontier_key, [])
+    frontier_ids = {(p["test_run_id"], p["trial_id"]) for p in pareto}
+    plot_df["is_frontier"] = plot_df.apply(
+        lambda r: (r["test_run_id"], r["trial_id"]) in frontier_ids, axis=1,
     )
-    fig.tight_layout(rect=(0, 0, 0.82, 1))
+
+    # Plot each group — dominated points at normal size.
+    for group in groups_sorted:
+        subset = plot_df[(plot_df["group"] == group) & (~plot_df["is_frontier"])]
+        if subset.empty:
+            continue
+        ax.scatter(
+            subset[x_col], subset["gas"],
+            marker=marker_map[group], label=group,
+            s=SCATTER_S, alpha=SCATTER_ALPHA,
+            edgecolors="black", linewidth=0.5,
+        )
+
+    # Plot frontier points — same group shape, enlarged, red edge.
+    frontier_df = plot_df[plot_df["is_frontier"]]
+    for group in frontier_df["group"].unique():
+        subset = frontier_df[frontier_df["group"] == group]
+        if subset.empty:
+            continue
+        ax.scatter(
+            subset[x_col], subset["gas"],
+            marker=marker_map[group],
+            s=140, zorder=6,
+            edgecolors="red", linewidth=2.5,
+            facecolors="none",
+            label=f"{group} (Pareto)",
+        )
+
+    # Frontier connecting line.
+    if pareto:
+        px = [p[x_col] for p in pareto]
+        py = [p["gas"] for p in pareto]
+        ax.plot(
+            px, py,
+            color="red", linewidth=3.0, linestyle="--",
+            label=f"Pareto Frontier ({len(pareto)} obs)",
+        )
+
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("Gas")
+    ax.set_title(title, fontsize=16, fontweight="bold")
+    ax.legend(loc="best")
 
     path = os.path.join(output_dir, filename)
     fig.savefig(path, bbox_inches="tight")
     plt.close(fig)
-
-    # Also save regression summary alongside plot.
-    csv_path = os.path.join(output_dir, "regression_summary.csv")
-    _append_regression_csv(csv_path, x_col, regression_rows)
-
-    print(f"[DEBUG] Saved {path}")
     return path
 
 
-def _append_regression_csv(
-    path: str,
-    predictor: str,
-    rows: list[tuple[str, int, float, float, float]],
-) -> None:
-    """Append regression stats to the shared CSV. Creates header on first call."""
-    header = ["model_name", "predictor", "samples", "slope", "intercept", "r_squared"]
-    # Detect if file exists to write header only once.
-    write_header = not os.path.exists(path)
-    with open(path, "a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(header)
-        for model, n, slope, intercept, r2 in rows:
-            writer.writerow([model, predictor, n, f"{slope:.6f}",
-                             f"{intercept:.6f}", f"{r2:.6f}"])
-
-
-def plot_cost_vs_gas(df: pd.DataFrame, output_dir: str) -> str:
-    """Cost vs Gas scatter with per-model linear regression."""
-    return _plot_regression_scatter(
-        df=df,
-        x_col="cost_usd",
-        y_col="gas",
-        xlabel="Synthesis Cost (USD)",
-        ylabel="Gas (gas_of_implementation)",
-        title="Gas Usage vs Synthesis Cost",
-        filename="cost_vs_gas.svg",
-        output_dir=output_dir,
+def plot_gas_cost_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot with cost-based Pareto frontier — colorblind-friendly."""
+    return _pareto_plot(
+        analysis, df, output_dir,
+        frontier_key="cost",
+        x_col="cost_of_synthesis_usd",
+        x_label="Synthesis Cost (USD)",
+        filename="gas_cost_pareto.svg",
+        title="Gas-Cost Pareto Frontier",
     )
 
 
-def plot_tokens_vs_gas(df: pd.DataFrame, output_dir: str) -> str:
-    """Total tokens vs Gas scatter with per-model linear regression.
-
-    This is the primary 'elbow' correlation plot: (input_tokens + output_tokens)
-    on x-axis, gas on y-axis."""
-    return _plot_regression_scatter(
-        df=df,
+def plot_gas_tokens_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) -> str:
+    """Scatter plot with token-based Pareto frontier — colorblind-friendly."""
+    return _pareto_plot(
+        analysis, df, output_dir,
+        frontier_key="tokens",
         x_col="total_tokens",
-        y_col="gas",
-        xlabel="Total Tokens (input + output)",
-        ylabel="Gas (gas_of_implementation)",
-        title="Gas Usage vs Token Consumption",
-        filename="tokens_vs_gas.svg",
-        output_dir=output_dir,
+        x_label="Total Tokens (Input + Output)",
+        filename="gas_tokens_pareto.svg",
+        title="Gas-Tokens Pareto Frontier",
     )
 
 
@@ -502,6 +441,10 @@ def main() -> None:
         plot_scatter(df, output_dir),
         plot_histogram(df, output_dir),
         plot_ecdf(df, output_dir),
+        plot_gas_vs_tokens(analysis, df, output_dir),
+        plot_gas_vs_cost(analysis, df, output_dir),
+        plot_gas_cost_pareto(analysis, df, output_dir),
+        plot_gas_tokens_pareto(analysis, df, output_dir),
     ]
 
     # Elbow method (K-means on total_tokens, gas)
