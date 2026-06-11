@@ -62,7 +62,9 @@ cargo run -- --cwd . --project test --db-type sqlite
 
 **Flags:** `--cwd` (required), `--project` (required), `--invariants` (default 0),
 `--db-type` (default `redis`), `--redis-url` (default `redis://localhost:6379`),
-`--db-path` (used with `--db-type sqlite`), `--model-name` (optional, persisted to test_run)
+`--db-path` (used with `--db-type sqlite`), `--model-name` (optional, persisted to test_run),
+`--api-key` (required for API mode, ignored in cluster mode),
+`--ctx-size` (default 200000, sets `-c` for llama-server and `CLAUDE_CODE_AUTO_COMPACT_WINDOW`)
 
 **Package:** `mcp_synth` (Cargo.toml name). Five binaries:
 
@@ -70,7 +72,7 @@ cargo run -- --cwd . --project test --db-type sqlite
 |--------|------|---------|
 | `mcp_synth` | `src/main.rs` | MCP server for Solidity synthesis |
 | `migrate` | `src/bin/migrate_sqlite_to_redis.rs` | SQLite-to-Redis data migration |
-| `queue_controller` | `src/bin/queue_controller.rs` | Automated Slurm synthesis executor |
+| `queue_controller` | `src/bin/queue_controller.rs` | Automated synthesis executor (Slurm cluster + external API) |
 | `populate_queue` | `src/bin/populate_queue.rs` | Batch enqueue synthesis jobs into Redis |
 | `stats_export` | `src/bin/stats_export.rs` | Statistical analysis of synthesis experiments |
 
@@ -222,23 +224,23 @@ Standalone binary:
 cargo run --bin migrate -- --sqlite-path <path> --redis-url redis://localhost:6379
 ```
 
-### `src/bin/queue_controller.rs` — Automated Slurm synthesis executor
+### `src/bin/queue_controller.rs` — Automated synthesis executor (Slurm + API)
 
-Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model serving, launches Claude Code with MCP integration. Processes sequentially until queue empty.
+Reads synthesis jobs from Redis priority queue, submits Slurm jobs (cluster mode) or uses external HTTP endpoints (API mode) for model serving, launches Claude Code with MCP integration. Processes sequentially until queue empty.
 
 **Module structure** (under `src/queue_controller/`):
 
 | File | Responsibility | Lines |
 |------|----------------|-------|
-| `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14) | ~480 |
-| `cleanup.rs` | Resource lifecycle: `CleanupState`, `CLEANUP`, `do_cleanup`, `CleanupGuard`, `cleanup_and_reset` | ~90 |
-| `claude.rs` | Claude Code subprocess + settings management | ~160 |
+| `mod.rs` | Orchestration: `run()` + 11 step functions (Steps 1-14), API mode branching | ~615 |
+| `cleanup.rs` | Resource lifecycle: `CleanupState`, `CLEANUP`, `do_cleanup`, `CleanupGuard`, `cleanup_and_reset` | ~110 |
+| `claude.rs` | Claude Code subprocess + settings management | ~205 |
 | `git_persistence.rs` | Git branch, commit, push via `git2` | ~270 |
-| `queue.rs` | Redis queue client (`QueueClient`) | ~120 |
-| `health.rs` | Startup, loop, and job preflight health checks | ~200 |
-| `slurm.rs` | Sbatch generation, polling, SSH tunnel, node resolution | ~320 |
-| `synthesis_usage.rs` | Claude Code output parsing + usage metrics | ~270 |
-| `synthesis_monitor.rs` | Slurm job recovery: polls Claude + Slurm, recreates server on expiry | ~155 |
+| `queue.rs` | Redis queue client (`QueueClient`) | ~160 |
+| `health.rs` | Startup, loop, cluster, and job preflight health checks | ~290 |
+| `slurm.rs` | Sbatch generation, polling, SSH tunnel, node resolution | ~335 |
+| `synthesis_usage.rs` | Claude Code output parsing + usage metrics | ~370 |
+| `synthesis_monitor.rs` | Slurm job recovery: polls Claude + Slurm, recreates server on expiry | ~150 |
 
 **Design principles:**
 - `mod.rs` reads like an execution script — `run()` + step functions are the flow
@@ -247,7 +249,7 @@ Reads synthesis jobs from Redis priority queue, submits Slurm jobs for model ser
 - `Args` (CLI definition) lives in the binary file, not in `mod.rs`
 - All step functions call into lower modules; they never implement infrastructure
 
-**Important architecture:** queue_controller runs **locally**. Model files and Slurm are on **cluster**. SSH tunnel forwards cluster compute node port to localhost so Claude Code (local) can reach the model server.
+**Important architecture:** queue_controller runs **locally**. In cluster mode, model files and Slurm are on **cluster** — SSH tunnel forwards compute node port to localhost so Claude Code can reach the model server. In API mode, there's no cluster dependency — Claude Code talks directly to the external HTTP endpoint.
 
 **Test projects path (local):** `/home/softdream/Programming/gits/git_diff_checker/test/`
 - test2 at `/home/softdream/Programming/gits/git_diff_checker/test/test2`
@@ -270,24 +272,34 @@ ssh cluster srun --gpus=1 --mem=41G ...
 **Queue Redis schema:**
 
 ```
-cluster_runs                                         -> Sorted Set (member="{model}:{job_id}", score=priority)
+cluster_runs                                         -> Sorted Set (member="{model}:{job_id}" or "api:{job_id}", score=priority)
 {model_name}:{job_id}                                -> Hash { seed, project, prompt }
+api:{job_id}                                         -> Hash { seed, project, prompt, execution_mode, api_url, model }
 ```
 
-**Processing phases (14 steps + 3 health check gates, 7 phases):**
+Cluster mode: key = `{model_name}:{job_id}`, model name parsed from key member. Hash fields: `seed`, `project`, `prompt`.
+API mode: key = `api:{job_id}`, actual model name stored in hash field `model`. Additional fields: `execution_mode=api`, `api_url`.
+
+**Processing phases (14 steps + 4 health check gates, 7 phases):**
+
+Phase 2 branches on `ExecutionMode`:
+- **Cluster**: submit Slurm job, create SSH tunnel, wait for model server
+- **API**: use external endpoint URL directly (no Slurm, no tunnel)
 
 | Phase | Steps | Function | What it does |
 |-------|-------|----------|-------------|
-| 0 | startup | `health::run_startup_checks` | Once before loop: cluster SSH, Slurm, models dir, llama path, claude binary, project root, SSH key |
-| 0 | per-iteration | `health::run_loop_checks` | Each iteration: Redis ping, cluster SSH, claude binary |
-| 0 | preflight | `health::run_job_preflight_checks` | After job load, before Slurm: project dir, prompt.md, git repo |
-| 1 | 1-3 | `peek_and_load_job` | ZRANGE peek (oldest first), parse `{model}:{id}`, HGETALL metadata |
-| 2 | 4-5 | `submit_slurm_job` | Generate sbatch, `ssh sbatch` via stdin pipe |
-| 2 | 6 | `wait_and_create_tunnel` | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
+| 0 | startup | `health::run_startup_checks` | Once before loop: claude binary, project root, SSH key |
+| 0 | cluster | `health::run_cluster_startup_checks` | Only when cluster job loaded: cluster SSH, Slurm, models dir, llama path |
+| 0 | per-iteration | `health::run_loop_checks` | Each iteration: Redis ping, claude binary |
+| 0 | preflight | `health::run_job_preflight_checks` | After job load, before cluster alloc: project dir, prompt.md, git repo |
+| 1 | 1-3 | `peek_and_load_job` | ZRANGE peek (oldest first), parse `{model}:{id}` or `api:{id}`, HGETALL metadata |
+| 2 | 4-5 | `submit_slurm_job` (cluster only) | Generate sbatch, `ssh sbatch` via stdin pipe |
+| 2 | 6 | `wait_and_create_tunnel` (cluster only) | Poll squeue until RUNNING, resolve node IP, `ssh -L` tunnel |
+| 2 | — | API mode | Use external `api_url` from job hash directly (no Slurm) |
 | 3 | 7+7b | `prepare_project_environment` | Resolve project dir, read `prompt.md` |
 | 3 | 8+8b | `setup_claude_and_git` | Inject mcpServers (with `--model-name`) in settings.local.json, create git branch |
-| 4 | 9 | `run_claude_code` + `SynthesisMonitor` | Kill stale mcp_synth, spawn `claude -p` → monitor loop polls Claude exit + Slurm health, recovers model server on expiry |
-| 5 | 10+10b | `cleanup_environment` | Restore settings, `scancel` Slurm job |
+| 4 | 9 | `run_claude_code` + `SynthesisMonitor` | Kill stale mcp_synth, spawn `claude -p`. Cluster mode: monitor polls Claude exit + Slurm health, recovers model server on expiry. API mode: blocking `claude_child.wait()` |
+| 5 | 10+10b | `cleanup_environment` | Restore settings, `scancel` Slurm job (cluster only) |
 | 6 | 11 | `check_claude_result` | Verify exit status + `check_succeeded_full()` |
 | 6 | 12 | `remove_job_from_queue` | ZREM from `cluster_runs` |
 | 7 | 13 | `persist_usage_to_redis` | Parse stream-json output, write usage to test_run |
@@ -310,11 +322,13 @@ cluster_runs                                         -> Sorted Set (member="{mod
 
 On the happy path (job never expires), behavior is identical to the old blocking wait.
 
-**Health checks (`health.rs`):** Three-level validation system to fail fast before spending cluster resources:
+**Health checks (`health.rs`):** Four-level validation system to fail fast before spending cluster resources:
 
-- **Startup** (`run_startup_checks`): Runs once before the controller loop. Validates cluster SSH is reachable, `sinfo` responds, models directory exists, `llama-server` is executable, `claude` binary is on PATH, project root exists, and SSH key file has safe permissions. Any failure is fatal.
+- **Startup** (`run_startup_checks`): Runs once before the controller loop. Validates `claude` binary is on PATH, project root exists, and SSH key file has safe permissions (if configured). Cluster-specific checks deferred to `run_cluster_startup_checks`. Any failure is fatal.
 
-- **Loop** (`run_loop_checks`): Runs at the start of each loop iteration. Cheap checks: Redis PING, `ssh {host} true`, `which claude`. Catches infrastructure degradation mid-run (e.g., Redis dropped, SSH agent expired).
+- **Cluster startup** (`run_cluster_startup_checks`): Runs when a cluster-mode job is loaded, before submitting Slurm. Validates cluster SSH reachable, `sinfo` responds, models directory exists, `llama-server` is executable. Separated from generic startup so API-mode jobs skip cluster validation entirely.
+
+- **Loop** (`run_loop_checks`): Runs at the start of each loop iteration. Cheap checks: Redis PING, `which claude`. Catches infrastructure degradation mid-run (e.g., Redis dropped, SSH agent expired).
 
 - **Job preflight** (`run_job_preflight_checks`): Runs after loading job metadata, before submitting a Slurm job. Checks project directory exists, `prompt.md` is present (warn-only), and git repository is valid (HEAD readable, remote origin set — only if `--git-ssh-key` is provided).
 
@@ -331,17 +345,28 @@ queue_controller \
     [--tunnel-port 8080] \
     [--poll-interval 30] \
     [--poll-timeout 1800] \
-    [--git-ssh-key ~/.ssh/id_ed25519]
+    [--git-ssh-key ~/.ssh/id_ed25519] \
+    [--api-key sk-...] \
+    [--ctx-size 200000]
 ```
 
 **`--project-root`** must point to local dir containing project subdirs (e.g. `test2/`). Model is on cluster — `--models-path` is the cluster-side path embedded in sbatch script.
 
-Strict fail-fast: any error (Redis conn, sbatch fail, Slurm FAILED, Claude Code non-zero, trial not succeeded_full) terminates immediately. Job stays in queue on failure.
+Strict fail-fast: any error (Redis conn, sbatch fail, Slurm FAILED or API unreachable, Claude Code non-zero, trial not succeeded_full) terminates immediately. Job stays in queue on failure.
+
+**Known API mode issues:**
+- `claude.rs:setup_claude_settings` hardcodes `"provider": "openai"` in `customModel` — DeepSeek `/anthropic` endpoint speaks Anthropic format and needs `"provider": "anthropic"`. Not yet fixed.
+- `mod.rs:run_claude_code` output name uses `endpoint.url != "http://127.0.0.1:8080"` to decide `_api_` suffix instead of checking `ExecutionMode`. Breaks with non-default `--tunnel-port`. Not yet fixed.
 
 ### `src/bin/populate_queue.rs` — Batch synthesis job enqueuer
 
 Generates N synthesis jobs via deterministic RNG and enqueues them into Redis for the queue controller. One command replaces manual per-job creation.
 
+Two modes (mutually exclusive):
+- **Cluster mode** (`--model`): Model filename on cluster filesystem. Key format: `{model}:{i}`
+- **API mode** (`--api-url` + `--api-model-name`): External HTTP endpoint. Key format: `api:{i}`, hash includes `execution_mode=api`, `api_url`, `model`
+
+Cluster mode:
 ```bash
 populate_queue \
     --model qwen3-solidity-27B-Q6_K.gguf \
@@ -352,7 +377,19 @@ populate_queue \
     [--redis-url redis://localhost:6379]
 ```
 
-**Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash (seed, project, prompt) → ZADD `cluster_runs` with priority = iteration index. Model name is in the key, not duplicated in hash.
+API mode:
+```bash
+populate_queue \
+    --api-url https://api.deepseek.com/anthropic \
+    --api-model-name deepseek-v4-flash \
+    --seed 96 \
+    --project test2 \
+    --prompt-file prompt.md \
+    --iterations 10 \
+    [--redis-url redis://localhost:6379]
+```
+
+**Algorithm:** `ChaCha8Rng::seed_from_u64(seed)` → `rng.next_u64()` per iteration → HSET job hash → ZADD `cluster_runs` with priority = iteration index. Cluster mode: model name in key, not duplicated in hash. API mode: key is `api:{i}`, model name stored in hash field `model`, additional fields `execution_mode`, `api_url`.
 
 Validation upfront: model/project non-empty, prompt file exists and non-empty, iterations > 0.
 
@@ -381,12 +418,12 @@ cargo run --bin stats_export -- \
 
 | File | Responsibility |
 |------|----------------|
-| `types.rs` | `GasObservation`, `ExperimentGroup`, `GroupStatistics`, `Outlier` |
+| `types.rs` | `GasObservation` (gas, total_tokens, cost, model_name, project_id), `ExperimentGroup`, `GroupStatistics`, `Outlier` |
 | `parser.rs` | Range parser (`label=start:end`) |
-| `loader.rs` | `RedisLoader` — read-only extraction from Redis |
-| `statistics.rs` | Statistical functions: mean, median, variance, std_dev, quartiles, IQR, CV, outlier detection |
-| `report.rs` | JSON/CSV/Markdown report generation + `analysis.json` |
-| `statistics_test.rs` | 18 tests for statistical computations |
+| `loader.rs` | `RedisLoader` — reads trial + test_run hashes; includes `succeeded_full`/`succeeded_partial`; skips observations missing token/cost data |
+| `statistics.rs` | Statistical functions + `detect_knee()` (geometric) + `compute_pareto_frontier()` (generic, closure-based) |
+| `report.rs` | JSON/CSV/Markdown report generation; `analysis.json` includes `knee_analysis` + `pareto_frontier` (cost/tokens) |
+| `statistics_test.rs` | 35 tests for statistical computations |
 | `parser_test.rs` | 11 tests for range parsing |
 
 ### `scripts/visualize_synthesis.py` — Python visualization
@@ -412,6 +449,10 @@ uv run scripts/visualize_synthesis.py results/analysis.json results/
 | `gas_scatter.svg` | Scatter | Gas vs test_run_id, colored by group |
 | `gas_histogram.svg` | Histogram | One subplot per group (faceted) |
 | `gas_ecdf.svg` | ECDF | Empirical CDF for direct group comparison |
+| `gas_vs_tokens.svg` | Scatter | Gas vs total tokens with knee point |
+| `gas_vs_cost.svg` | Scatter | Gas vs synthesis cost with knee point |
+| `gas_cost_pareto.svg` | Pareto | Cost-based Pareto frontier (colorblind-friendly: shape+color) |
+| `gas_tokens_pareto.svg` | Pareto | Token-based Pareto frontier (colorblind-friendly) |
 
 ## Key Patterns
 
@@ -431,8 +472,13 @@ uv run scripts/visualize_synthesis.py results/analysis.json results/
 - Separate `cleanup.rs` module for all resource lifecycle management (CleanupState, CLEANUP, do_cleanup, CleanupGuard, cleanup_and_reset)
 - `SynthesisMonitor` in `synthesis_monitor.rs` — dedicated component for Claude Code + Slurm job monitoring during synthesis. Owns tunnel handle, polls both processes via `try_wait()`/`get_job_state()`, recovers model server on Slurm expiry via `recover()` (resubmit sbatch + re-establish tunnel + sync CleanupState). Replaces blocking `claude_child.wait()` with polling loop
 - `JobState::is_terminal()` on `slurm::JobState` — classifies terminal states (Completed, Failed, Cancelled, Timeout, NotFound) for expiry detection. `get_job_state` made `pub(crate)` for monitor access
-- `health.rs` three-level validation: `run_startup_checks` (once before loop), `run_loop_checks` (every iteration), `run_job_preflight_checks` (after job load, before Slurm). Each check is a private function with `[HEALTH]` prefixed logging, called from public orchestrator functions that bail on first failure
+- `health.rs` four-level validation: `run_startup_checks` (once before loop), `run_cluster_startup_checks` (lazy, only when cluster-mode job loaded), `run_loop_checks` (every iteration), `run_job_preflight_checks` (after job load, before cluster alloc). Each check is a private function with `[HEALTH]` prefixed logging, called from public orchestrator functions that bail on first failure
 - `QueueClient::ping()` — lightweight Redis connectivity check via `PING`, used by `run_loop_checks` to detect dropped connections mid-run
+- `detect_knee()` — geometric knee detection via max perpendicular distance from chord; used for diminishing-returns analysis of tokens/gas and cost/gas
+- `compute_pareto_frontier()` — generic, takes `x_extract`/`y_extract` closures; dual frontier computed during export (cost + tokens), stored in `analysis.json["pareto_frontier"]["cost"|"tokens"]`
+- `_pareto_plot()` — shared Python helper for both Pareto SVGs; each group gets a distinct marker shape (colorblind-friendly), frontier points use same shape enlarged with red edge
+- `GasObservation` enriched with `total_tokens`, `cost_of_synthesis_usd`, `model_name`, `project_id` from `test_run:{id}` hash — loader reads both `test_run` and `synthesis_trial` hashes
+- Observations without token/cost data (manual runs outside queue_controller) are filtered out during load to avoid polluting statistics with incomplete syntheses
 - CLI Args defined in `src/bin/queue_controller.rs`, not in `mod.rs` — binary owns its interface
 - Edition 2024, musl target for static linking
 

@@ -162,6 +162,96 @@ pub fn compute_statistics(group: &ExperimentGroup) -> GroupStatistics {
     }
 }
 
+/// Detect the knee point in a curve using maximum perpendicular distance.
+///
+/// Sorts points by X ascending, then finds the point with the greatest
+/// perpendicular distance from the chord connecting the first and last points.
+/// Returns `Some((knee_x, knee_y))` for ≥3 points, `None` otherwise.
+pub fn detect_knee(x: &[f64], y: &[f64]) -> Option<(f64, f64)> {
+    if x.len() < 3 || y.len() < 3 || x.len() != y.len() {
+        return None;
+    }
+
+    let mut points: Vec<(f64, f64)> = x.iter().copied().zip(y.iter().copied()).collect();
+    points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    let first = *points.first()?;
+    let last = *points.last()?;
+
+    let dx = last.0 - first.0;
+    let dy = last.1 - first.1;
+    let line_len_sq = dx * dx + dy * dy;
+
+    if line_len_sq < f64::EPSILON {
+        return None;
+    }
+
+    let mut max_dist = -1.0_f64;
+    let mut knee = None;
+
+    for &(px, py) in &points {
+        // Perpendicular distance from point (px, py) to line (first → last).
+        let num = ((last.0 - first.0) * (first.1 - py) - (first.0 - px) * (last.1 - first.1)).abs();
+        let dist = num / line_len_sq.sqrt();
+
+        if dist > max_dist {
+            max_dist = dist;
+            knee = Some((px, py));
+        }
+    }
+
+    knee
+}
+
+/// Compute the Pareto frontier for a pair of metrics (both to be minimized).
+///
+/// `x_extract` and `y_extract` are closures that project an observation to the
+/// two dimensions.  An observation is Pareto-optimal if no other observation
+/// has lower-or-equal x AND lower-or-equal y, with at least one strict improvement.
+/// Observations with zero tokens AND zero cost are excluded from the analysis.
+pub fn compute_pareto_frontier<'a, F1, F2>(
+    observations: &'a [GasObservation],
+    x_extract: F1,
+    y_extract: F2,
+) -> Vec<&'a GasObservation>
+where
+    F1: Fn(&GasObservation) -> f64,
+    F2: Fn(&GasObservation) -> f64,
+{
+    let candidates: Vec<&GasObservation> = observations
+        .iter()
+        .filter(|o| o.total_tokens > 0 || o.cost_of_synthesis_usd > 0.0)
+        .collect();
+
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut frontier: Vec<&GasObservation> = Vec::new();
+
+    'outer: for obs in &candidates {
+        let x_obs = x_extract(obs);
+        let y_obs = y_extract(obs);
+        for other in &candidates {
+            let same = std::ptr::eq(*other, *obs);
+            if same {
+                continue;
+            }
+            let x_leq = x_extract(other) <= x_obs;
+            let y_leq = y_extract(other) <= y_obs;
+            let strictly_better = x_extract(other) < x_obs || y_extract(other) < y_obs;
+            if x_leq && y_leq && strictly_better {
+                continue 'outer;
+            }
+        }
+        frontier.push(obs);
+    }
+
+    frontier.sort_by(|a, b| x_extract(a).partial_cmp(&x_extract(b)).unwrap());
+
+    frontier
+}
+
 #[cfg(test)]
 #[path = "statistics_test.rs"]
 mod tests;

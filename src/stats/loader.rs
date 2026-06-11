@@ -20,7 +20,13 @@ impl RedisLoader {
         Ok(Self { conn })
     }
 
-    /// Load all `succeeded_full` observations for a range of test runs.
+    /// Load all `succeeded_full` / `succeeded_partial` observations for a range of test runs.
+    ///
+    /// For each test_run, reads the `synthesis_trial:by_test_run` ZSET (sorted by iteration),
+    /// finds the LAST trial with result_type `succeeded_full` or `succeeded_partial`,
+    /// and reads token/cost information from the `test_run:{id}` hash.
+    ///
+    /// When multiple trials succeed for the same test_run, the highest-iteration one wins.
     pub fn load_group(&mut self, label: &str, start: u64, end: u64) -> Result<ExperimentGroup> {
         let mut group = ExperimentGroup::new(label.to_string(), start, end);
 
@@ -61,8 +67,8 @@ impl RedisLoader {
                     None => continue,
                 };
 
-                // We only care about succeeded_full for gas extraction.
-                if result_type != "succeeded_full" {
+                // Include both succeeded_full and succeeded_partial.
+                if result_type != "succeeded_full" && result_type != "succeeded_partial" {
                     continue;
                 }
 
@@ -81,29 +87,46 @@ impl RedisLoader {
                     Err(_) => continue,
                 };
 
+                // Read test_run hash for token/cost metadata.
+                let tr_fields = self.get_test_run_hash(test_run_id);
+                let total_input: u64 = tr_fields
+                    .get("totalInputTokens")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                let total_output: u64 = tr_fields
+                    .get("totalOutputTokens")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                let cost: f64 = tr_fields
+                    .get("cost_of_synthesis_USD")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.0);
+                let model = tr_fields
+                    .get("model_name")
+                    .cloned()
+                    .unwrap_or_default();
+                let project: u64 = tr_fields
+                    .get("project_id")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+
                 best_gas = Some(GasObservation {
                     test_run_id,
                     trial_id,
                     gas,
-                    synth_time_seconds: None, // will be set after the loop
-                    model_name: model_name.clone(),
-                    cost_usd,
-                    input_tokens,
-                    output_tokens,
+                    total_tokens: total_input.saturating_add(total_output),
+                    cost_of_synthesis_usd: cost,
+                    model_name: model,
+                    project_id: project,
                 });
             }
 
-            // Compute synth_time: difference between the latest and earliest
-            // trial timestamps for this test run.  Works for any number of
-            // iterations (single-iteration runs yield 0.0).
-            let synth_time = compute_synth_time(test_run_id, &iteration_times);
-
-            // Push best gas (last succeeded_full or only one) with synth_time attached.
+            // Push best gas (last succeeded_full/partial, i.e. highest iteration).
+            // Skip observations missing token/cost data (manual runs, not queue controller).
             if let Some(obs) = best_gas {
-                group.add_observation(GasObservation {
-                    synth_time_seconds: synth_time,
-                    ..obs
-                });
+                if obs.total_tokens > 0 || obs.cost_of_synthesis_usd > 0.0 {
+                    group.add_observation(obs);
+                }
             }
         }
 
@@ -147,27 +170,4 @@ impl RedisLoader {
             Err(_) => HashMap::new(),
         }
     }
-}
-
-/// Compute synth_time as the wall-clock seconds between the earliest and latest
-/// trial timestamps for a test run.  Returns `None` when no timestamps are
-/// available (no trials at all), `Some(0.0)` for a single trial, and
-/// `Some(positive f64)` otherwise.
-fn compute_synth_time(test_run_id: u64, iteration_times: &[(u64, String)]) -> Option<f64> {
-    if iteration_times.is_empty() {
-        eprintln!(
-            "[WARNING] test_run {test_run_id}: no trials found, cannot compute synth_time"
-        );
-        return None;
-    }
-
-    // RFC 3339 strings are lexicographically sortable, so we can compare
-    // them directly to find the earliest and latest timestamps.
-    let (_, earliest) = iteration_times.iter().min_by(|a, b| a.1.cmp(&b.1))?;
-    let (_, latest) = iteration_times.iter().max_by(|a, b| a.1.cmp(&b.1))?;
-
-    let t1 = DateTime::parse_from_rfc3339(earliest).ok()?;
-    let t2 = DateTime::parse_from_rfc3339(latest).ok()?;
-
-    Some((t2.timestamp_millis() - t1.timestamp_millis()) as f64 / 1000.0)
 }
