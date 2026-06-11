@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::DateTime;
 use std::collections::HashMap;
 
 use crate::stats::types::{ExperimentGroup, GasObservation};
@@ -30,14 +31,36 @@ impl RedisLoader {
         let mut group = ExperimentGroup::new(label.to_string(), start, end);
 
         for test_run_id in start..=end {
+            // Read test_run-level metadata (model_name, cost, tokens).
+            let tr_fields = self.get_test_run_hash(test_run_id);
+            let model_name = tr_fields.get("model_name").cloned();
+            let cost_usd = tr_fields
+                .get("cost_of_synthesis_USD")
+                .and_then(|v| v.parse::<f64>().ok());
+            let input_tokens = tr_fields
+                .get("totalInputTokens")
+                .and_then(|v| v.parse::<u64>().ok());
+            let output_tokens = tr_fields
+                .get("totalOutputTokens")
+                .and_then(|v| v.parse::<u64>().ok());
+
             let trial_ids: Vec<String> = self
                 .get_trial_ids_for_test_run(test_run_id);
 
             let mut best_gas: Option<GasObservation> = None;
+            let mut iteration_times: Vec<(u64, String)> = Vec::new();
 
             for tid_str in &trial_ids {
                 let fields: HashMap<String, String> = self
                     .get_trial_hash(tid_str);
+
+                // Collect iteration timestamps for synth_time computation.
+                if let (Some(iter_str), Some(ts)) = (fields.get("iteration"), fields.get("created_at"))
+                {
+                    if let Ok(iter) = iter_str.parse::<u64>() {
+                        iteration_times.push((iter, ts.clone()));
+                    }
+                }
 
                 let result_type = match fields.get("result_type") {
                     Some(rt) => rt.as_str(),

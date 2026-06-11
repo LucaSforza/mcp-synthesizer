@@ -6,6 +6,7 @@
 #   "seaborn>=0.12",
 #   "matplotlib>=3.7",
 #   "numpy>=1.24",
+#   "scikit-learn>=1.3",
 # ]
 # ///
 """
@@ -26,14 +27,19 @@ Outputs (in <output_dir>):
     gas_tokens_pareto.svg  Token-based Pareto frontier (colorblind-friendly)
 """
 
+import csv
 import json
 import os
 import sys
+from itertools import cycle
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -57,6 +63,7 @@ GROUP_MARKERS = ["o", "s", "^", "D", "v", "p", "*", "h"]
 # Data loading
 # ---------------------------------------------------------------------------
 
+
 def load_analysis(path: str) -> dict:
     """Load the analysis.json file."""
     with open(path) as f:
@@ -68,7 +75,7 @@ def build_dataframe(analysis: dict) -> pd.DataFrame:
     rows = []
     for group in analysis["groups"]:
         for obs in group["observations"]:
-            rows.append({
+            row = {
                 "group": group["label"],
                 "test_run_id": obs["test_run_id"],
                 "trial_id": obs["trial_id"],
@@ -82,8 +89,54 @@ def build_dataframe(analysis: dict) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Plot functions
+# Visual encoding helpers
 # ---------------------------------------------------------------------------
+
+
+def assign_model_visuals(models: list[str]) -> dict:
+    """Assign a (marker, color, linestyle) tuple to each model, cycling through
+    B&W-safe alternatives."""
+    n = len(models)
+    marker_cycle = cycle(MARKER_SHAPES)
+    color_cycle = cycle(GRAYSCALE_PALETTE)
+    ls_cycle = cycle(LINE_STYLES)
+
+    # Use deterministic seed so output is stable.
+    rng = np.random.default_rng(42)
+    assigned = {}
+    # Shuffle assignment order for visual variety when models share prefixes.
+    indices = list(range(n))
+    rng.shuffle(indices)
+
+    for idx in indices:
+        assigned[models[idx]] = (
+            next(marker_cycle),
+            next(color_cycle),
+            next(ls_cycle),
+        )
+    return assigned
+
+
+def fit_regression(
+    x: np.ndarray, y: np.ndarray
+) -> tuple[float, float, float, object]:
+    """Fit linear regression, return (slope, intercept, r_squared, model)."""
+    mask = ~(np.isnan(x) | np.isnan(y))
+    x_clean = x[mask].reshape(-1, 1)
+    y_clean = y[mask]
+    if len(x_clean) < 2:
+        return 0.0, 0.0, 0.0, None
+    reg = LinearRegression()
+    reg.fit(x_clean, y_clean)
+    y_pred = reg.predict(x_clean)
+    r2 = r2_score(y_clean, y_pred)
+    return float(reg.coef_[0]), float(reg.intercept_), r2, reg
+
+
+# ---------------------------------------------------------------------------
+# Original plot functions (group-based)
+# ---------------------------------------------------------------------------
+
 
 def plot_boxplot(df: pd.DataFrame, stats: list, output_dir: str) -> str:
     """Multi-group boxplot with strip overlay, mean markers, and std-dev intervals."""
@@ -364,6 +417,7 @@ def plot_gas_tokens_pareto(analysis: dict, df: pd.DataFrame, output_dir: str) ->
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <analysis.json> <output_dir>", file=sys.stderr)
@@ -380,6 +434,7 @@ def main() -> None:
 
     print(f"[DEBUG] Loaded {len(df)} observations across {len(stats)} groups")
 
+    # Original plots
     paths = [
         plot_boxplot(df, stats, output_dir),
         plot_violin(df, output_dir),
@@ -392,8 +447,18 @@ def main() -> None:
         plot_gas_tokens_pareto(analysis, df, output_dir),
     ]
 
+    # Elbow method (K-means on total_tokens, gas)
+    elbow_path = plot_gas_elbow(df, output_dir)
+    if elbow_path:
+        paths.append(elbow_path)
+
+    # Multi-model correlation plots
+    paths.append(plot_cost_vs_gas(df, output_dir))
+    paths.append(plot_tokens_vs_gas(df, output_dir))
+
     for path in paths:
-        print(f"[DEBUG] Saved {path}")
+        if path:
+            print(f"[DEBUG] Saved {path}")
 
 
 if __name__ == "__main__":

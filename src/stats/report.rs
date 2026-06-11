@@ -270,6 +270,20 @@ fn generate_csv(groups: &[ExperimentGroup], output_dir: &std::path::Path) -> Res
 
     for group in groups {
         for obs in &group.observations {
+            let synth_sec = match obs.synth_time_seconds {
+                Some(s) => format!("{s}"),
+                None => "N.A.".to_string(),
+            };
+            let model = obs.model_name.as_deref().unwrap_or("");
+            let cost = obs
+                .cost_usd
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
+            let inp = obs
+                .input_tokens
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
+            let out = obs
+                .output_tokens
+                .map_or("N.A.".to_string(), |v| format!("{v}"));
             writeln!(
                 file,
                 "{},{},{},{},{},{},{},{}",
